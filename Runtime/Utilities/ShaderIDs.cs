@@ -63,4 +63,11 @@ internal static class ShaderIDs {
   internal static readonly int PerVoxelGIRayCountSqrt = Shader.PropertyToID("PerVoxelGIRayCountSqrt");
   internal static readonly int TempSkyColor = Shader.PropertyToID("TempSkyColor");
   internal static readonly int NoiseNum = Shader.PropertyToID("NoiseNum");
+  internal static readonly int _previousLighting = Shader.PropertyToID("_previousLighting");
+  internal static readonly int _lastFrameViewProj = Shader.PropertyToID("_lastFrameViewProj");
+  internal static readonly int ClipToWorldPrev = Shader.PropertyToID("ClipToWorldPrev");
+  internal static readonly int _CameraDepthTexture_LastFrame = Shader.PropertyToID("_CameraDepthTexture_LastFrame");
+  internal static readonly int NoiseRGB16bit = Shader.PropertyToID("NoiseRGB16bit");
+  internal static readonly int PerPixelGIRayAccumFrames = Shader.PropertyToID("PerPixelGIRayAccumFrames");
+  internal static readonly int PerPixelShadowRayAccumFrames = Shader.PropertyToID("PerPixelShadowRayAccumFrames");
 }

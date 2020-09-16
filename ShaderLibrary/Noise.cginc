@@ -23,7 +23,84 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.*/
+//#define LookupNoise
+#define IntHashNoise
+#ifdef LookupNoise
+Texture2D NoiseRGB16bit;
 
+SamplerState my_point_repeat_sampler;
+//  1 out, 1 in...
+float hash(float p)
+{
+  return NoiseRGB16bit.SampleLevel(my_point_repeat_sampler, float2(p, p*294.5983) * 8.04, 0).r;
+}
+//  1 out, 2 in...
+float hash(float2 p)
+{
+  return NoiseRGB16bit.SampleLevel(my_point_repeat_sampler, p * float2(7.5, 4.21875), 0).r;
+}
+//  2 out, 2 in...
+float2 hash2(float2 p)
+{
+  return NoiseRGB16bit.SampleLevel(my_point_repeat_sampler, p * float2(7.5, 4.21875), 0).rg;
+}
+//  1 out, 3 in...
+float hash(float3 p)
+{
+  return NoiseRGB16bit.SampleLevel(my_point_repeat_sampler, frac(p.z * float2(495.6934,294.69)) * float2(5.6,59.38) + p * 8.04, 0).r;
+}
+//  3 out, 2 in...
+float hash3(float2 p)
+{
+  return NoiseRGB16bit.SampleLevel(my_point_repeat_sampler, p * 8.04, 0).rgb;
+}
+#else
+#ifdef IntHashNoise
+//Thank you so much Spatial! - https://stackoverflow.com/a/17479300
+
+// A single iteration of Bob Jenkins' One-At-A-Time hashing algorithm.
+uint hash(uint x) {
+  x += (x << 10u);
+  x ^= (x >> 6u);
+  x += (x << 3u);
+  x ^= (x >> 11u);
+  x += (x << 15u);
+  return x;
+}
+
+
+
+// Compound versions of the hashing algorithm I whipped together.
+uint hash(uint2 v) { return hash(v.x ^ hash(v.y)); }
+uint hash(uint3 v) { return hash(v.x ^ hash(v.y) ^ hash(v.z)); }
+uint hash(uint4 v) { return hash(v.x ^ hash(v.y) ^ hash(v.z) ^ hash(v.w)); }
+
+
+
+// Construct a float with half-open range [0:1] using low 23 bits.
+// All zeroes yields 0.0, all ones yields the next smallest representable value below 1.0.
+float floatConstruct(uint m) {
+  uint ieeeMantissa = 0x007FFFFFu; // binary32 mantissa bitmask
+  uint ieeeOne = 0x3F800000u; // 1.0 in IEEE binary32
+
+  m &= ieeeMantissa;                     // Keep only mantissa bits (fractional part)
+  m |= ieeeOne;                          // Add fractional part to 1.0
+
+  float  f = asfloat(m);       // Range [1:2]
+  return f - 1.0;                        // Range [0:1]
+}
+
+
+
+// Pseudo-random value in half-open range [0:1].
+float hash(float x) { return floatConstruct(hash(asuint(x))); }
+float hash(float2  v) { return floatConstruct(hash(asuint(v))); }
+float2 hash2(float  v) { return float2(hash(v), hash(v + 10)); }
+float3 hash3(float2  v) { return float3(hash(v), hash(v + 10), hash(v + 20)); }
+float hash(float3  v) { return floatConstruct(hash(asuint(v))); }
+float hash(float4  v) { return floatConstruct(hash(asuint(v))); }
+
+#else
 //----------------------------------------------------------------------------------------
 //  1 out, 1 in...
 float hash(float p)
@@ -149,7 +226,8 @@ float4 hash4(float4 p4)
 }
 
 //-------------------------------------------------------------------
-
+#endif
+#endif
 
 
 

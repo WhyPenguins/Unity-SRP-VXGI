@@ -60,14 +60,21 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   public bool throttleTracing = false;
   [Range(1f, 100f)]
   public float tracingRate = 10f;
+
+  public int voxelizationRate = 1;
   public bool followCamera = false;
 
+  int VoxelizationNum = 0;
   int NoiseNum = 0;
   public bool AnimateNoise = false;
   public bool AllowUnsafeValues = false;
   public int PerPixelPerLightShadowRays = 5;
   public int PerPixelGIRays = 4;
   public int PerVoxelGIRays = 1;
+
+  public int PerPixelGIRayAccumFrames = 10;
+  public int PerPixelShadowRayAccumFrames = 3;
+
   public Color AmbientColor;
 
   public bool resolutionPlusOne {
@@ -88,6 +95,14 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     get
     {
       return (RequiresBinary && (int)binaryResolution < (int)resolution) ? (int)binaryResolution : (int)resolution;
+    }
+  }
+
+  public bool ForceAnimateNoise
+  {
+    get
+    {
+      return PerPixelGIRayAccumFrames > 0 || PerPixelShadowRayAccumFrames > 0;
     }
   }
 
@@ -119,8 +134,8 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     SetupShaderKeywords(renderContext);
     SetupShaderVariables(renderContext);
 
-    if (AnimateNoise)
-      NoiseNum += 1;
+    if (AnimateNoise || ForceAnimateNoise)
+      NoiseNum = (NoiseNum+1) % 1000;
     float time = Time.unscaledTime;
     bool tracingThrottled = throttleTracing;
 
@@ -157,7 +172,8 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   }
 
   void PrePass(ScriptableRenderContext renderContext, VXGIRenderer renderer) {
-
+    VoxelizationNum++;
+    if (VoxelizationNum % voxelizationRate != 0) return;
     //var displacement = (voxelSpaceCenter - _lastVoxelSpaceCenter) / voxelSize;
 
     //if (displacement.sqrMagnitude > 0f) {
@@ -220,6 +236,8 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     _command.SetGlobalInt(ShaderIDs.PerVoxelGIRayCount, PerVoxelGIRays);
     _command.SetGlobalInt(ShaderIDs.PerPixelGIRayCountSqrt, (int)Math.Sqrt(PerPixelGIRays));
     _command.SetGlobalInt(ShaderIDs.PerVoxelGIRayCountSqrt, (int)Math.Sqrt(PerVoxelGIRays));
+    _command.SetGlobalFloat(ShaderIDs.PerPixelShadowRayAccumFrames, PerPixelShadowRayAccumFrames);
+    _command.SetGlobalFloat(ShaderIDs.PerPixelGIRayAccumFrames, PerPixelGIRayAccumFrames);
     _command.SetGlobalInt(ShaderIDs.Resolution, ColorVoxelizer.ColorStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.BinaryResolution, BinaryVoxelizer.BinaryStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.StepMapResolution, BinaryVoxelizer.StepMapper.StepMapStorageResolution.x);
@@ -351,26 +369,46 @@ public class VXGIEditor : Editor
     _vxgi.throttleTracing = EditorGUILayout.Toggle("Throttle Tracing", _vxgi.throttleTracing);
     if (_vxgi.throttleTracing)
       _vxgi.tracingRate = EditorGUILayout.Slider("Tracing Rate", _vxgi.tracingRate, 1.0f, 100.0f);
+
+    _vxgi.voxelizationRate = EditorGUILayout.IntSlider("Voxelization Rate (every x frames)", _vxgi.voxelizationRate, 1, 30); ;
     if (_vxgi.lightingMethod == VXGI.LightingMethod.Rays)
     {
       _vxgi.AllowUnsafeValues = EditorGUILayout.Toggle("Allow Unsafe Values", _vxgi.AllowUnsafeValues);
-      _vxgi.PerPixelGIRays = SafeIntSlider("Per-Pixel GI Quality", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays), 0, 10, _vxgi.AllowUnsafeValues);
+
+      EditorGUILayout.LabelField("Lighting - Per Pixel", EditorStyles.boldLabel);
+      _vxgi.PerPixelGIRays = SafeIntSlider("GI Quality", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays), 0, 10, _vxgi.AllowUnsafeValues);
       _vxgi.PerPixelGIRays *= _vxgi.PerPixelGIRays;
+      _vxgi.PerPixelGIRayAccumFrames = SafeIntSlider("GI Temporal Samples", _vxgi.PerPixelGIRayAccumFrames, 0, 100, _vxgi.AllowUnsafeValues);
       if (_vxgi.PerPixelGIRays == 0)
         EditorGUILayout.LabelField("Per Pixel: Disabled");
       else
         EditorGUILayout.LabelField("Per Pixel: " + _vxgi.PerPixelGIRays.ToString() + " rays");
 
-      _vxgi.PerPixelPerLightShadowRays = SafeIntSlider("Per-Pixel Shadow Rays for light with radius 1", _vxgi.PerPixelPerLightShadowRays, 0, 20, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelPerLightShadowRays = SafeIntSlider("Shadow Rays for light with radius 1", _vxgi.PerPixelPerLightShadowRays, 0, 20, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelShadowRayAccumFrames = SafeIntSlider("Shadow Temporal Samples", _vxgi.PerPixelShadowRayAccumFrames, 0, 50, _vxgi.AllowUnsafeValues);
 
-      _vxgi.PerVoxelGIRays = SafeIntSlider("Per-Voxel GI Quality", (int)Math.Sqrt((double)_vxgi.PerVoxelGIRays), 0, 5, _vxgi.AllowUnsafeValues);
+      EditorGUILayout.LabelField("Lighting - Per Voxel", EditorStyles.boldLabel);
+      _vxgi.PerVoxelGIRays = SafeIntSlider("GI Quality", (int)Math.Sqrt((double)_vxgi.PerVoxelGIRays), 0, 5, _vxgi.AllowUnsafeValues);
       _vxgi.PerVoxelGIRays *= _vxgi.PerVoxelGIRays;
       if (_vxgi.PerVoxelGIRays == 0)
         EditorGUILayout.LabelField("Per Voxel: Disabled");
       else
         EditorGUILayout.LabelField("Per Voxel: " + _vxgi.PerVoxelGIRays.ToString() + " rays");
 
-      _vxgi.AnimateNoise = EditorGUILayout.Toggle("Animate Per-Pixel Noise", _vxgi.AnimateNoise);
+      if (_vxgi.ForceAnimateNoise)
+      {
+        GUI.enabled = false;
+        EditorGUILayout.Toggle("Animate Per-Pixel Noise", true);
+      }
+      else
+      {
+        _vxgi.AnimateNoise = EditorGUILayout.Toggle("Animate Per-Pixel Noise", _vxgi.AnimateNoise);
+      }
+      if (_vxgi.AnimateNoise == false && _vxgi.ForceAnimateNoise)
+      {
+        EditorGUILayout.HelpBox("Per-pixel samples must change each frame (animated noise) for temporal super-sampling to work.", MessageType.Warning);
+      }
+      GUI.enabled = true;
       _vxgi.AmbientColor = EditorGUILayout.ColorField("Sky Color", _vxgi.AmbientColor);
       _vxgi.indirectDiffuseModifier = EditorGUILayout.FloatField("Indirect Diffuse Modifier", _vxgi.indirectDiffuseModifier);
       GUI.enabled = false;

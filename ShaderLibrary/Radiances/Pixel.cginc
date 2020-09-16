@@ -51,7 +51,7 @@ float3 DirectPixelRadiance(LightingData data)
       {
         for (float s = 0; s < shadowSamples; s++)
         {
-          float3 samplePos = SphereSample(lightSource.type == LIGHT_SOURCE_TYPE_DIRECTIONAL ? data.worldPosition + normalize(data.vecL) * 5 : lightSource.worldposition, lightSource.radius.x, hash3(data.screenPosition * 293.2983 + s * 3.4492));
+          float3 samplePos = SphereSample(lightSource.type == LIGHT_SOURCE_TYPE_DIRECTIONAL ? data.worldPosition + normalize(data.vecL) * 5 : lightSource.worldposition, lightSource.radius.x, hash3(data.screenPosition * 293.2983 + s * 3.4492 + NoiseNum));
           float3 castDir = normalize(samplePos - data.worldPosition);
           float3 samplePosVoxel = WorldSpaceToNormalizedVoxelSpace(samplePos);
           raycastResult raycast = VoxelRaycastBias(data.worldPosition, castDir, normalize(data.vecN), 60, lightSource.type == LIGHT_SOURCE_TYPE_DIRECTIONAL ? 0 : (distance(data.voxelPosition, samplePosVoxel) * BinaryResolution));
@@ -67,7 +67,7 @@ float3 DirectPixelRadiance(LightingData data)
     }
   }
 
-  return data.diffuseColor * radiance;
+  return radiance;
 }
 
 float3 IndirectSpecularPixelRadiance(LightingData data)
@@ -78,9 +78,9 @@ float3 IndirectDiffusePixelRadiance(LightingData data)
 {
   if (TextureSDF(data.voxelPosition) < 0.0) return 0.0;
 
-  float3 radiance = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, PerPixelGIRayCountSqrt, hash(data.screenPosition + NoiseNum));
+  float3 radiance = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, PerPixelGIRayCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
 
 
-  return data.diffuseColor * radiance;
+  return radiance;
 }
 #endif // VXGI_SHADERLIBRARY_RADIANCES_PIXEL

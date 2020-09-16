@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -21,6 +22,7 @@ public class VXGIRenderer : System.IDisposable {
   PostProcessRenderContext _postProcessRenderContext;
   RenderTargetBinding _gBufferBinding;
   ScriptableCullingParameters _cullingParameters;
+
 
   public VXGIRenderer(VXGIRenderPipeline renderPipeline) {
     RenderPipeline = renderPipeline;
@@ -55,12 +57,24 @@ public class VXGIRenderer : System.IDisposable {
     _lightSources.Dispose();
   }
 
+  //I hate to do this but I have no idea how else to track the state of each camera seperately.
+  //This will leak memory whenever cameras are destroyed, but honestly what else can be done?
+  Dictionary<Camera, PingPongTexture> CameraDepthTextures = new Dictionary<Camera, PingPongTexture>();
+  Dictionary<Camera, Matrix4x4> clipToWorldLast = new Dictionary<Camera, Matrix4x4>();
+  Dictionary<Camera, Matrix4x4> previousProj = new Dictionary<Camera, Matrix4x4>();
+
   public void RenderDeferred(ScriptableRenderContext renderContext, Camera camera, VXGI vxgi) {
     if (!camera.TryGetCullingParameters(out _cullingParameters)) return;
 
     _cullingResults = renderContext.Cull(ref _cullingParameters);
 
     renderContext.SetupCameraProperties(camera);
+    if (!previousProj.ContainsKey(camera))
+      previousProj[camera] = new Matrix4x4();
+
+    _command.SetGlobalTexture(ShaderIDs.NoiseRGB16bit, TextureUtil.NoiseRGB16bit);
+    _command.SetGlobalMatrix(ShaderIDs._lastFrameViewProj, previousProj[camera]);
+    
 
     int width = camera.pixelWidth;
     int height = camera.pixelHeight;
@@ -77,12 +91,45 @@ public class VXGIRenderer : System.IDisposable {
 
     TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeGBuffer, vxgi);
 
-    _command.GetTemporaryRT(ShaderIDs._CameraDepthTexture, width, height, 24, FilterMode.Point, RenderTextureFormat.Depth, RenderTextureReadWrite.Linear);
+    bool RenderWithTemporal = true;// camera == Camera.main;
+
+    if (!CameraDepthTextures.ContainsKey(camera))
+      CameraDepthTextures[camera] = new PingPongTexture();
+
+    PingPongTexture CameraDepthTexture = CameraDepthTextures[camera];
+
+    //Debug.Log(RenderWithTemporal);
+    if (RenderWithTemporal)
+    {
+      CameraDepthTexture.Update(new Vector3Int(width, height, 1), new RenderTextureDescriptor
+      {
+        colorFormat = RenderTextureFormat.Depth,
+        depthBufferBits = 24,
+        dimension = TextureDimension.Tex2D,
+        sRGB = false,
+        msaaSamples = 1
+      }, true);
+      CameraDepthTexture.current.filterMode = FilterMode.Point;
+    }
+
+    if (RenderWithTemporal)
+    {
+      _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture, CameraDepthTexture.current);
+      _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture_LastFrame, CameraDepthTexture.old);
+    }
+    if (!RenderWithTemporal)
+      _command.GetTemporaryRT(ShaderIDs._CameraDepthTexture, width, height, 24, FilterMode.Point, RenderTextureFormat.Depth, RenderTextureReadWrite.Linear);
+
+    RenderTargetIdentifier depthTex = RenderWithTemporal ? (RenderTargetIdentifier)CameraDepthTexture.current : (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture;
+
     _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture0, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
     _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture1, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
     _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture2, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB2101010, RenderTextureReadWrite.Linear);
     _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture3, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
     _command.GetTemporaryRT(ShaderIDs.FrameBuffer, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+
+    _gBufferBinding.depthRenderTarget = depthTex;
+
     _command.SetRenderTarget(_gBufferBinding);
     _command.ClearRenderTarget(true, true, Color.clear);
     renderContext.ExecuteCommandBuffer(_command);
@@ -91,13 +138,13 @@ public class VXGIRenderer : System.IDisposable {
     RenderGBuffers(renderContext, camera);
     TriggerCameraEvent(renderContext, camera, CameraEvent.AfterGBuffer, vxgi);
 
-    CopyCameraTargetToFrameBuffer(renderContext, camera);
+    CopyCameraTargetToFrameBuffer(depthTex, renderContext, camera);
 
     bool depthNormalsNeeded = (camera.depthTextureMode & DepthTextureMode.DepthNormals) != DepthTextureMode.None;
 
     if (depthNormalsNeeded) {
       TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeDepthNormalsTexture, vxgi);
-      RenderCameraDepthNormalsTexture(renderContext, camera);
+      RenderCameraDepthNormalsTexture(depthTex, renderContext, camera);
       TriggerCameraEvent(renderContext, camera, CameraEvent.AfterDepthNormalsTexture, vxgi);
     }
 
@@ -105,9 +152,11 @@ public class VXGIRenderer : System.IDisposable {
     RenderLighting(renderContext, camera, vxgi);
     TriggerCameraEvent(renderContext, camera, CameraEvent.AfterLighting, vxgi);
 
+    renderContext.SetupCameraProperties(camera);
+
     if (camera.clearFlags == CameraClearFlags.Skybox) {
       TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeSkybox, vxgi);
-      RenderSkyBox(renderContext, camera);
+      RenderSkyBox(depthTex, renderContext, camera);
       TriggerCameraEvent(renderContext, camera, CameraEvent.AfterSkybox, vxgi);
     }
 
@@ -118,14 +167,14 @@ public class VXGIRenderer : System.IDisposable {
     TriggerCameraEvent(renderContext, camera, CameraEvent.AfterImageEffectsOpaque, vxgi);
 
     TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeForwardAlpha, vxgi);
-    RenderTransparent(renderContext, camera);
+    RenderTransparent(depthTex, renderContext, camera);
     TriggerCameraEvent(renderContext, camera, CameraEvent.AfterForwardAlpha, vxgi);
 
     RenderGizmos(renderContext, camera, GizmoSubset.PreImageEffects);
 
     renderContext.SetupCameraProperties(camera);
 
-    _command.SetRenderTarget(ShaderIDs.FrameBuffer, (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture);
+    _command.SetRenderTarget(ShaderIDs.FrameBuffer, _gBufferBinding.depthRenderTarget);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
 
@@ -147,7 +196,8 @@ public class VXGIRenderer : System.IDisposable {
       _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthNormalsTexture);
     }
 
-    _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthTexture);
+    if (!RenderWithTemporal)
+      _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthTexture);
     _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture0);
     _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture1);
     _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture2);
@@ -156,12 +206,18 @@ public class VXGIRenderer : System.IDisposable {
     _command.EndSample(_command.name);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
+
+    if (RenderWithTemporal)
+    {
+      previousProj[camera] = camera.projectionMatrix * camera.worldToCameraMatrix;
+      CameraDepthTexture.Swap();
+    }
   }
 
-  void CopyCameraTargetToFrameBuffer(ScriptableRenderContext renderContext, Camera camera) {
+  void CopyCameraTargetToFrameBuffer(RenderTargetIdentifier depthTex, ScriptableRenderContext renderContext, Camera camera) {
     _command.GetTemporaryRT(ShaderIDs.Dummy, Screen.width, Screen.height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
     _command.SetGlobalVector(ShaderIDs.BlitViewport, new Vector4(camera.rect.width, camera.rect.height, camera.rect.xMin, camera.rect.yMin));
-    _command.Blit(ShaderIDs._CameraDepthTexture, BuiltinRenderTextureType.CameraTarget, UtilityShader.material, (int)UtilityShader.Pass.DepthCopyViewport);
+    _command.Blit(depthTex, BuiltinRenderTextureType.CameraTarget, UtilityShader.material, (int)UtilityShader.Pass.DepthCopyViewport);
     _command.Blit(BuiltinRenderTextureType.CameraTarget, ShaderIDs.Dummy);
     _command.Blit(ShaderIDs.Dummy, ShaderIDs.FrameBuffer, UtilityShader.material, (int)UtilityShader.Pass.GrabCopy);
     _command.ReleaseTemporaryRT(ShaderIDs.Dummy);
@@ -169,9 +225,9 @@ public class VXGIRenderer : System.IDisposable {
     _command.Clear();
   }
 
-  void RenderCameraDepthNormalsTexture(ScriptableRenderContext renderContext, Camera camera) {
+  void RenderCameraDepthNormalsTexture(RenderTargetIdentifier depthTex, ScriptableRenderContext renderContext, Camera camera) {
     _command.GetTemporaryRT(ShaderIDs._CameraDepthNormalsTexture, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
-    _command.Blit(ShaderIDs._CameraDepthTexture, ShaderIDs._CameraDepthNormalsTexture, UtilityShader.material, (int)UtilityShader.Pass.EncodeDepthNormal);
+    _command.Blit(depthTex, ShaderIDs._CameraDepthNormalsTexture, UtilityShader.material, (int)UtilityShader.Pass.EncodeDepthNormal);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
   }
@@ -194,8 +250,10 @@ public class VXGIRenderer : System.IDisposable {
     }
 #endif
   }
-
-  void RenderLighting(ScriptableRenderContext renderContext, Camera camera, VXGI vxgi) {
+  void RenderLighting(ScriptableRenderContext renderContext, Camera camera, VXGI vxgi)
+  {
+    if (!clipToWorldLast.ContainsKey(camera))
+      clipToWorldLast[camera] = new Matrix4x4();
     Matrix4x4 clipToWorld = camera.cameraToWorldMatrix * GL.GetGPUProjectionMatrix(camera.projectionMatrix, false).inverse;
 
     _renderScale[2] = vxgi.diffuseResolutionScale;
@@ -203,6 +261,7 @@ public class VXGIRenderer : System.IDisposable {
     _command.BeginSample(_sampleRenderLighting);
     _command.SetGlobalMatrix(ShaderIDs.ClipToVoxel, vxgi.ColorVoxelizer.worldToVoxel * clipToWorld);
     _command.SetGlobalMatrix(ShaderIDs.ClipToWorld, clipToWorld);
+    _command.SetGlobalMatrix(ShaderIDs.ClipToWorldPrev, clipToWorldLast[camera]);
     _command.SetGlobalMatrix(ShaderIDs.VoxelToWorld, vxgi.ColorVoxelizer.voxelToWorld);
     _command.SetGlobalMatrix(ShaderIDs.WorldToVoxel, vxgi.ColorVoxelizer.worldToVoxel);
 
@@ -213,6 +272,7 @@ public class VXGIRenderer : System.IDisposable {
     _command.EndSample(_sampleRenderLighting);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
+    clipToWorldLast[camera] = clipToWorld;
   }
 
   void RenderPostProcessing(ScriptableRenderContext renderContext, Camera camera) {
@@ -261,15 +321,15 @@ public class VXGIRenderer : System.IDisposable {
     _command.Clear();
   }
 
-  void RenderSkyBox(ScriptableRenderContext renderContext, Camera camera) {
-    _command.SetRenderTarget(ShaderIDs.FrameBuffer, (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture);
+  void RenderSkyBox(RenderTargetIdentifier depthTex, ScriptableRenderContext renderContext, Camera camera) {
+    _command.SetRenderTarget(ShaderIDs.FrameBuffer, depthTex);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
     renderContext.DrawSkybox(camera);
   }
 
-  void RenderTransparent(ScriptableRenderContext renderContext, Camera camera) {
-    _command.SetRenderTarget(ShaderIDs.FrameBuffer, (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture);
+  void RenderTransparent(RenderTargetIdentifier depthTex, ScriptableRenderContext renderContext, Camera camera) {
+    _command.SetRenderTarget(ShaderIDs.FrameBuffer, depthTex);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
 

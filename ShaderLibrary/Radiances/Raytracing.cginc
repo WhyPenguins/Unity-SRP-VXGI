@@ -216,7 +216,8 @@ float3 StratifiedHemisphereSample(float3 worldPos, float3 worldNor, int maxSteps
   {
     rand += 0.0267;
     //Rotate a random hemisphere sample into the normal basis
-    float3 castdir = mul(HemisphereCosineSample(float2(stratify(hash(rand), qual, s % qual), stratify(hash(rand * 723.389), qual, s / qual))), normalBasis);
+    float2 rands = hash2(rand);
+    float3 castdir = mul(HemisphereCosineSample(float2(stratify(rands.x, qual, s % qual), stratify(rands.y, qual, s / qual))), normalBasis);
     float3 col = VoxelRaycastBias(worldPos, castdir, worldNor, maxSteps).color.rgb;
     radiance += col;
   }

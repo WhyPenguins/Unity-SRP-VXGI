@@ -124,6 +124,8 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   }
 
   public void Render(ScriptableRenderContext renderContext, Camera camera, VXGIRenderer renderer) {
+    bool RenderMeshes = camera.cameraType != CameraType.Reflection;
+
     VXGIRenderPipeline.TriggerCameraCallback(Camera, "OnPreRender", Camera.onPreRender);
 
     _command.BeginSample(_command.name);
@@ -134,26 +136,32 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     SetupShaderKeywords(renderContext);
     SetupShaderVariables(renderContext);
 
-    if (AnimateNoise || ForceAnimateNoise)
-      NoiseNum = (NoiseNum+1) % 1000;
-    float time = Time.unscaledTime;
-    bool tracingThrottled = throttleTracing;
+    if (RenderMeshes)
+    {
+      if (AnimateNoise || ForceAnimateNoise)
+        NoiseNum = (NoiseNum + 1) % 1000;
+      float time = Time.unscaledTime;
+      bool tracingThrottled = throttleTracing;
 
-    if (tracingThrottled) {
-      if (_previousTrace + 1f / tracingRate < time) {
-        _previousTrace = time;
+      if (tracingThrottled)
+      {
+        if (_previousTrace + 1f / tracingRate < time)
+        {
+          _previousTrace = time;
 
+          PrePass(renderContext, renderer);
+        }
+      }
+      else
+      {
         PrePass(renderContext, renderer);
       }
-    } else {
-      PrePass(renderContext, renderer);
     }
 
     renderContext.SetupCameraProperties(camera);
-
     _command.ClearRenderTarget(
       (camera.clearFlags & CameraClearFlags.Depth) != 0,
-      camera.clearFlags == CameraClearFlags.Color,
+      (camera.clearFlags & CameraClearFlags.Color) != 0,
       camera.backgroundColor
     );
     renderContext.ExecuteCommandBuffer(_command);
@@ -219,12 +227,13 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
   }
-
+  public ReflectionProbe SkyProbe;
   void SetupShaderVariables(ScriptableRenderContext renderContext) {
     _command.SetGlobalTexture(ShaderIDs.Radiance[0], ColorVoxelizer.radiance);
     _command.SetGlobalTexture(ShaderIDs.StepMap, BinaryVoxelizer.StepMapper?.stepmap);
     _command.SetGlobalTexture(ShaderIDs.StepMapFine2x2x2Encode, BinaryVoxelizer.StepMapper?.StepMapFine2x2x2Encode);
     _command.SetGlobalTexture(ShaderIDs.Binary, BinaryVoxelizer.binary);
+    _command.SetGlobalTexture(ShaderIDs.SkyProbe, SkyProbe==null? null : SkyProbe.texture);
 
     _command.SetGlobalColor(ShaderIDs.TempSkyColor, AmbientColor);
     _command.SetGlobalFloat(ShaderIDs.IndirectDiffuseModifier, indirectDiffuseModifier);
@@ -409,7 +418,8 @@ public class VXGIEditor : Editor
         EditorGUILayout.HelpBox("Per-pixel samples must change each frame (animated noise) for temporal super-sampling to work.", MessageType.Warning);
       }
       GUI.enabled = true;
-      _vxgi.AmbientColor = EditorGUILayout.ColorField("Sky Color", _vxgi.AmbientColor);
+      _vxgi.SkyProbe = (ReflectionProbe)EditorGUILayout.ObjectField("Sky Reflection Probe", (UnityEngine.Object)_vxgi.SkyProbe, typeof(ReflectionProbe));
+      //_vxgi.AmbientColor = EditorGUILayout.ColorField("Sky Color", _vxgi.AmbientColor);
       _vxgi.indirectDiffuseModifier = EditorGUILayout.FloatField("Indirect Diffuse Modifier", _vxgi.indirectDiffuseModifier);
       GUI.enabled = false;
         _vxgi.indirectSpecularModifier = EditorGUILayout.FloatField("Indirect Specular Modifier", _vxgi.indirectSpecularModifier);

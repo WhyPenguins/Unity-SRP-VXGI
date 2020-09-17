@@ -70,4 +70,5 @@ internal static class ShaderIDs {
   internal static readonly int NoiseRGB16bit = Shader.PropertyToID("NoiseRGB16bit");
   internal static readonly int PerPixelGIRayAccumFrames = Shader.PropertyToID("PerPixelGIRayAccumFrames");
   internal static readonly int PerPixelShadowRayAccumFrames = Shader.PropertyToID("PerPixelShadowRayAccumFrames");
+  internal static readonly int SkyProbe = Shader.PropertyToID("SkyProbe");
 }

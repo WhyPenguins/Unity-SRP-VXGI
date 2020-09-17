@@ -101,7 +101,7 @@ raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float max
     if (dot(normPos - saturate(normPos), float3(1, 1, 1)) != 0)
     {
       //Sample sky-light
-      result.color = TempSkyColor;//float4(0.6, 0.86, 1, 1) * 0.3;
+      result.color = UNITY_SAMPLE_TEXCUBE_LOD(SkyProbe, rayDir, 0);//TempSkyColor;//float4(0.6, 0.86, 1, 1) * 0.3;
       result.sky = true;
       result.distlimit = false;
       result.normalizedPosition = normPos;

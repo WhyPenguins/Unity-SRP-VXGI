@@ -64,10 +64,14 @@ public class VXGIRenderer : System.IDisposable {
   Dictionary<Camera, Matrix4x4> previousProj = new Dictionary<Camera, Matrix4x4>();
 
   public void RenderDeferred(ScriptableRenderContext renderContext, Camera camera, VXGI vxgi) {
+
+    bool RenderWithTemporal = camera.cameraType != CameraType.Reflection;// camera == Camera.main;
+    bool RenderMeshes = camera.cameraType != CameraType.Reflection;
+
+
     if (!camera.TryGetCullingParameters(out _cullingParameters)) return;
 
     _cullingResults = renderContext.Cull(ref _cullingParameters);
-
     renderContext.SetupCameraProperties(camera);
     if (!previousProj.ContainsKey(camera))
       previousProj[camera] = new Matrix4x4();
@@ -81,136 +85,167 @@ public class VXGIRenderer : System.IDisposable {
 
     _command.BeginSample(_command.name);
 
-    SetupLightSources(_command, vxgi);
-
-    if (camera.cameraType != CameraType.SceneView) {
+    if (camera.cameraType != CameraType.SceneView)
+    {
       _command.EnableShaderKeyword("PROJECTION_PARAMS_X");
-    } else {
+    }
+    else
+    {
       _command.DisableShaderKeyword("PROJECTION_PARAMS_X");
     }
 
-    TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeGBuffer, vxgi);
-
-    bool RenderWithTemporal = true;// camera == Camera.main;
-
-    if (!CameraDepthTextures.ContainsKey(camera))
-      CameraDepthTextures[camera] = new PingPongTexture();
-
-    PingPongTexture CameraDepthTexture = CameraDepthTextures[camera];
-
-    //Debug.Log(RenderWithTemporal);
-    if (RenderWithTemporal)
+    if (RenderMeshes)
     {
-      CameraDepthTexture.Update(new Vector3Int(width, height, 1), new RenderTextureDescriptor
+      SetupLightSources(_command, vxgi);
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeGBuffer, vxgi);
+
+      if (!CameraDepthTextures.ContainsKey(camera))
+        CameraDepthTextures[camera] = new PingPongTexture();
+
+      PingPongTexture CameraDepthTexture = CameraDepthTextures[camera];
+
+      if (RenderWithTemporal)
       {
-        colorFormat = RenderTextureFormat.Depth,
-        depthBufferBits = 24,
-        dimension = TextureDimension.Tex2D,
-        sRGB = false,
-        msaaSamples = 1
-      }, true);
-      CameraDepthTexture.current.filterMode = FilterMode.Point;
-    }
+        CameraDepthTexture.Update(new Vector3Int(width, height, 1), new RenderTextureDescriptor
+        {
+          colorFormat = RenderTextureFormat.Depth,
+          depthBufferBits = 24,
+          dimension = TextureDimension.Tex2D,
+          sRGB = false,
+          msaaSamples = 1
+        }, true);
+        CameraDepthTexture.current.filterMode = FilterMode.Point;
+      }
 
-    if (RenderWithTemporal)
+      if (RenderWithTemporal)
+      {
+        _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture, CameraDepthTexture.current);
+        _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture_LastFrame, CameraDepthTexture.old);
+      }
+      if (!RenderWithTemporal)
+        _command.GetTemporaryRT(ShaderIDs._CameraDepthTexture, width, height, 24, FilterMode.Point, RenderTextureFormat.Depth, RenderTextureReadWrite.Linear);
+
+      RenderTargetIdentifier depthTex = RenderWithTemporal ? (RenderTargetIdentifier)CameraDepthTexture.current : (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture;
+
+      _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture0, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+      _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture1, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
+      _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture2, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB2101010, RenderTextureReadWrite.Linear);
+      _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture3, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+      _command.GetTemporaryRT(ShaderIDs.FrameBuffer, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+
+      _gBufferBinding.depthRenderTarget = depthTex;
+
+      _command.SetRenderTarget(_gBufferBinding);
+      _command.ClearRenderTarget(true, true, Color.clear);
+      renderContext.ExecuteCommandBuffer(_command);
+      _command.Clear();
+
+      RenderGBuffers(renderContext, camera);
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterGBuffer, vxgi);
+
+      CopyCameraTargetToFrameBuffer(depthTex, renderContext, camera);
+
+      bool depthNormalsNeeded = (camera.depthTextureMode & DepthTextureMode.DepthNormals) != DepthTextureMode.None;
+
+      if (depthNormalsNeeded)
+      {
+        TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeDepthNormalsTexture, vxgi);
+        RenderCameraDepthNormalsTexture(depthTex, renderContext, camera);
+        TriggerCameraEvent(renderContext, camera, CameraEvent.AfterDepthNormalsTexture, vxgi);
+      }
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeLighting, vxgi);
+      RenderLighting(renderContext, camera, vxgi);
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterLighting, vxgi);
+
+      renderContext.SetupCameraProperties(camera);
+
+      if (camera.clearFlags == CameraClearFlags.Skybox)
+      {
+        TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeSkybox, vxgi);
+        RenderSkyBox(depthTex, renderContext, camera);
+        TriggerCameraEvent(renderContext, camera, CameraEvent.AfterSkybox, vxgi);
+      }
+
+      UpdatePostProcessingLayer(renderContext, camera, vxgi);
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeImageEffectsOpaque, vxgi);
+      RenderPostProcessingOpaqueOnly(renderContext, camera);
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterImageEffectsOpaque, vxgi);
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeForwardAlpha, vxgi);
+      RenderTransparent(depthTex, renderContext, camera);
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterForwardAlpha, vxgi);
+
+      RenderGizmos(renderContext, camera, GizmoSubset.PreImageEffects);
+
+      renderContext.SetupCameraProperties(camera);
+
+      _command.SetRenderTarget(ShaderIDs.FrameBuffer, _gBufferBinding.depthRenderTarget);
+      renderContext.ExecuteCommandBuffer(_command);
+      _command.Clear();
+
+      renderContext.InvokeOnRenderObjectCallback();
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeImageEffects, vxgi);
+      RenderPostProcessing(renderContext, camera);
+      _command.SetGlobalVector(ShaderIDs.BlitViewport, new Vector4(camera.rect.width, camera.rect.height, camera.rect.xMin, camera.rect.yMin));
+      if (camera.cameraType == CameraType.Reflection)
+        _command.CopyTexture(ShaderIDs.FrameBuffer, 0, BuiltinRenderTextureType.CameraTarget, 0);
+      else
+        _command.Blit(ShaderIDs.FrameBuffer, BuiltinRenderTextureType.CameraTarget, UtilityShader.material, (int)UtilityShader.Pass.BlitViewport);
+      renderContext.ExecuteCommandBuffer(_command);
+      _command.Clear();
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterImageEffects, vxgi);
+
+      RenderGizmos(renderContext, camera, GizmoSubset.PostImageEffects);
+
+      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterEverything, vxgi);
+
+      if (depthNormalsNeeded)
+      {
+        _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthNormalsTexture);
+      }
+
+      if (!RenderWithTemporal)
+        _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthTexture);
+      _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture0);
+      _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture1);
+      _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture2);
+      _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture3);
+      _command.ReleaseTemporaryRT(ShaderIDs.FrameBuffer);
+      _command.EndSample(_command.name);
+      renderContext.ExecuteCommandBuffer(_command);
+      _command.Clear();
+
+      if (RenderWithTemporal)
+      {
+        previousProj[camera] = camera.projectionMatrix * camera.worldToCameraMatrix;
+        CameraDepthTexture.Swap();
+      }
+    }
+    else
     {
-      _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture, CameraDepthTexture.current);
-      _command.SetGlobalTexture(ShaderIDs._CameraDepthTexture_LastFrame, CameraDepthTexture.old);
-    }
-    if (!RenderWithTemporal)
-      _command.GetTemporaryRT(ShaderIDs._CameraDepthTexture, width, height, 24, FilterMode.Point, RenderTextureFormat.Depth, RenderTextureReadWrite.Linear);
+      renderContext.SetupCameraProperties(camera);
 
-    RenderTargetIdentifier depthTex = RenderWithTemporal ? (RenderTargetIdentifier)CameraDepthTexture.current : (RenderTargetIdentifier)ShaderIDs._CameraDepthTexture;
-
-    _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture0, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
-    _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture1, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
-    _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture2, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGB2101010, RenderTextureReadWrite.Linear);
-    _command.GetTemporaryRT(ShaderIDs._CameraGBufferTexture3, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-    _command.GetTemporaryRT(ShaderIDs.FrameBuffer, width, height, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
-
-    _gBufferBinding.depthRenderTarget = depthTex;
-
-    _command.SetRenderTarget(_gBufferBinding);
-    _command.ClearRenderTarget(true, true, Color.clear);
-    renderContext.ExecuteCommandBuffer(_command);
-    _command.Clear();
-
-    RenderGBuffers(renderContext, camera);
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterGBuffer, vxgi);
-
-    CopyCameraTargetToFrameBuffer(depthTex, renderContext, camera);
-
-    bool depthNormalsNeeded = (camera.depthTextureMode & DepthTextureMode.DepthNormals) != DepthTextureMode.None;
-
-    if (depthNormalsNeeded) {
-      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeDepthNormalsTexture, vxgi);
-      RenderCameraDepthNormalsTexture(depthTex, renderContext, camera);
-      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterDepthNormalsTexture, vxgi);
-    }
-
-    TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeLighting, vxgi);
-    RenderLighting(renderContext, camera, vxgi);
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterLighting, vxgi);
-
-    renderContext.SetupCameraProperties(camera);
-
-    if (camera.clearFlags == CameraClearFlags.Skybox) {
-      TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeSkybox, vxgi);
-      RenderSkyBox(depthTex, renderContext, camera);
-      TriggerCameraEvent(renderContext, camera, CameraEvent.AfterSkybox, vxgi);
-    }
-
-    UpdatePostProcessingLayer(renderContext, camera, vxgi);
-
-    TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeImageEffectsOpaque, vxgi);
-    RenderPostProcessingOpaqueOnly(renderContext, camera);
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterImageEffectsOpaque, vxgi);
-
-    TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeForwardAlpha, vxgi);
-    RenderTransparent(depthTex, renderContext, camera);
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterForwardAlpha, vxgi);
-
-    RenderGizmos(renderContext, camera, GizmoSubset.PreImageEffects);
-
-    renderContext.SetupCameraProperties(camera);
-
-    _command.SetRenderTarget(ShaderIDs.FrameBuffer, _gBufferBinding.depthRenderTarget);
-    renderContext.ExecuteCommandBuffer(_command);
-    _command.Clear();
-
-    renderContext.InvokeOnRenderObjectCallback();
-
-    TriggerCameraEvent(renderContext, camera, CameraEvent.BeforeImageEffects, vxgi);
-    RenderPostProcessing(renderContext, camera);
-    _command.SetGlobalVector(ShaderIDs.BlitViewport, new Vector4(camera.rect.width, camera.rect.height, camera.rect.xMin, camera.rect.yMin));
-    _command.Blit(ShaderIDs.FrameBuffer, BuiltinRenderTextureType.CameraTarget, UtilityShader.material, (int)UtilityShader.Pass.BlitViewport);
-    renderContext.ExecuteCommandBuffer(_command);
-    _command.Clear();
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterImageEffects, vxgi);
-
-    RenderGizmos(renderContext, camera, GizmoSubset.PostImageEffects);
-
-    TriggerCameraEvent(renderContext, camera, CameraEvent.AfterEverything, vxgi);
-
-    if (depthNormalsNeeded) {
-      _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthNormalsTexture);
-    }
-
-    if (!RenderWithTemporal)
-      _command.ReleaseTemporaryRT(ShaderIDs._CameraDepthTexture);
-    _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture0);
-    _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture1);
-    _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture2);
-    _command.ReleaseTemporaryRT(ShaderIDs._CameraGBufferTexture3);
-    _command.ReleaseTemporaryRT(ShaderIDs.FrameBuffer);
-    _command.EndSample(_command.name);
-    renderContext.ExecuteCommandBuffer(_command);
-    _command.Clear();
-
-    if (RenderWithTemporal)
-    {
-      previousProj[camera] = camera.projectionMatrix * camera.worldToCameraMatrix;
-      CameraDepthTexture.Swap();
+      if (camera.clearFlags == CameraClearFlags.Skybox)
+      {
+        _command.SetRenderTarget(BuiltinRenderTextureType.CameraTarget);
+        renderContext.ExecuteCommandBuffer(_command);
+        _command.Clear();
+        renderContext.DrawSkybox(camera);
+      }
+      else
+      {
+        _command.SetRenderTarget(BuiltinRenderTextureType.CameraTarget);
+        _command.ClearRenderTarget(
+          true,true,
+          camera.backgroundColor
+        );
+        renderContext.ExecuteCommandBuffer(_command);
+        _command.Clear();
+      }
     }
   }
 
@@ -218,8 +253,21 @@ public class VXGIRenderer : System.IDisposable {
     _command.GetTemporaryRT(ShaderIDs.Dummy, Screen.width, Screen.height, 0, FilterMode.Point, RenderTextureFormat.ARGB32, RenderTextureReadWrite.Linear);
     _command.SetGlobalVector(ShaderIDs.BlitViewport, new Vector4(camera.rect.width, camera.rect.height, camera.rect.xMin, camera.rect.yMin));
     _command.Blit(depthTex, BuiltinRenderTextureType.CameraTarget, UtilityShader.material, (int)UtilityShader.Pass.DepthCopyViewport);
-    _command.Blit(BuiltinRenderTextureType.CameraTarget, ShaderIDs.Dummy);
-    _command.Blit(ShaderIDs.Dummy, ShaderIDs.FrameBuffer, UtilityShader.material, (int)UtilityShader.Pass.GrabCopy);
+
+    if (camera.cameraType != CameraType.Reflection)
+    {
+      _command.Blit(BuiltinRenderTextureType.CameraTarget, ShaderIDs.Dummy);
+      _command.Blit(ShaderIDs.Dummy, ShaderIDs.FrameBuffer, UtilityShader.material, (int)UtilityShader.Pass.GrabCopy);
+    }
+    else
+    {
+      _command.SetRenderTarget(ShaderIDs.FrameBuffer);
+      _command.ClearRenderTarget(
+        (camera.clearFlags & CameraClearFlags.Depth) != 0,
+        ((camera.clearFlags & CameraClearFlags.Color) != 0 || (camera.clearFlags & CameraClearFlags.SolidColor) != 0),
+        camera.backgroundColor
+      );
+    }
     _command.ReleaseTemporaryRT(ShaderIDs.Dummy);
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();

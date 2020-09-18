@@ -63,6 +63,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
 
   public int voxelizationRate = 1;
   public bool followCamera = false;
+  public float interestBias = 0.5f;
 
   int VoxelizationNum = 0;
   int NoiseNum = 0;
@@ -295,7 +296,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
 
   void UpdateStorage(bool existenceIsRequired)
   {
-    if (followCamera) center = transform.position;
+    if (followCamera) center = transform.position + new Vector3(transform.forward.x,0, transform.forward.z) * interestBias * bound * 0.5f;
     cascadesCount = Mathf.Clamp(cascadesCount, MinCascadesCount, MaxCascadesCount);
 
     if (colorVoxelizer == null)
@@ -436,6 +437,10 @@ public class VXGIEditor : Editor
     _vxgi.bound = EditorGUILayout.Slider("Bounds", _vxgi.bound, 0f, 256f);
 
     _vxgi.followCamera = EditorGUILayout.Toggle("Follow Camera", _vxgi.followCamera);
+    if (_vxgi.followCamera)
+    {
+      _vxgi.interestBias = EditorGUILayout.Slider("Interest Bias", _vxgi.interestBias,0f,1f);
+    }
     GUI.enabled = !_vxgi.followCamera;
       _vxgi.center = EditorGUILayout.Vector3Field("Center", _vxgi.center);
     GUI.enabled = true;

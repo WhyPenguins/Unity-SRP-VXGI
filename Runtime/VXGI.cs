@@ -31,6 +31,7 @@ public class VXGI : MonoBehaviour {
   public const int MinCascadesCount = 1;
 
   public bool anisotropicVoxel;
+  public bool aproxTwoSidedVoxel = true;
   [Range(MinCascadesCount, MaxCascadesCount)]
   public int cascadesCount = MinCascadesCount;
   public Vector3 center;
@@ -223,6 +224,14 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
       _command.EnableShaderKeyword("VXGI_BINARY");
     } else {
       _command.DisableShaderKeyword("VXGI_BINARY");
+    }
+    if (aproxTwoSidedVoxel)
+    {
+      _command.EnableShaderKeyword("VXGI_APPROXIMATETWOSIDES");
+    }
+    else
+    {
+      _command.DisableShaderKeyword("VXGI_APPROXIMATETWOSIDES");
     }
 
     renderContext.ExecuteCommandBuffer(_command);
@@ -448,6 +457,7 @@ public class VXGIEditor : Editor
       _vxgi.anisotropicVoxel = EditorGUILayout.Toggle("Anistropic Colors", _vxgi.anisotropicVoxel);
       _vxgi.anisotropicVoxel = false;
     GUI.enabled = true;
+    _vxgi.aproxTwoSidedVoxel = EditorGUILayout.Toggle("Aprox Two Sided Colors", _vxgi.aproxTwoSidedVoxel);
     _vxgi.resolution = (VXGI.Resolution)EditorGUILayout.EnumPopup("Color Resolution", _vxgi.resolution);
     if (_vxgi.RequiresBinary)
     {

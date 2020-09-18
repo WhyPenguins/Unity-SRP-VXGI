@@ -21,6 +21,7 @@ Shader "Hidden/VXGI/Voxelization"
       #pragma multi_compile _ VXGI_ANISOTROPIC_VOXEL
       #pragma multi_compile _ VXGI_COLOR
       #pragma multi_compile _ VXGI_BINARY
+      #pragma multi_compile _ VXGI_APPROXIMATETWOSIDES
       #pragma shader_feature _EMISSION
       #pragma shader_feature_local _METALLICGLOSSMAP
       #pragma shader_feature_local _ _ALPHATEST_ON _ALPHABLEND_ON _ALPHAPREMULTIPLY_ON
@@ -218,6 +219,11 @@ Shader "Hidden/VXGI/Voxelization"
 
         float4 color = mad(-0.5, metallic, 1.0) * _Color * tex2Dlod(_MainTex, float4(i.uv, 0.0, 0.0));
 
+        float3 worldNor = i.normal;
+#ifdef VXGI_APPROXIMATETWOSIDES
+        if (dot(i.normal, normalize(_WorldSpaceCameraPos-i.worldPos)) < 0)worldNor = -worldNor;
+#endif
+
         VoxelData d;
         d.Initialize();
         d.SetPosition(voxelPosition);
@@ -227,7 +233,7 @@ Shader "Hidden/VXGI/Voxelization"
         //int level = VXGI_CascadeIndex;
         //position = TransformCascadeToVoxelPosition(position, level);
 
-        float4 finalColor = CalculateLitColor(WorldSpaceToNormalizedVoxelSpace(i.worldPos), i.worldPos, i.normal, color, emission);
+        float4 finalColor = CalculateLitColor(WorldSpaceToNormalizedVoxelSpace(i.worldPos), i.worldPos, worldNor, color, emission);
 #if defined(_ALPHABLEND_ON) || defined(_ALPHAPREMULTIPLY_ON)
         finalColor = Premul(finalColor);
 #else

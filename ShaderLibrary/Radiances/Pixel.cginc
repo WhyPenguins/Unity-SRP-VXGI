@@ -74,11 +74,13 @@ float3 IndirectSpecularPixelRadiance(LightingData data)
 {
   return 0.0;
 }
-float3 IndirectDiffusePixelRadiance(LightingData data)
+float3 IndirectDiffusePixelRadiance(LightingData data, bool newArea, out float samplesOutput)
 {
+  float sampleCountSqrt = newArea ? PerPixelGIRayCountsSqrt.z : PerPixelGIRayCountsSqrt.y;
+  samplesOutput = newArea ? PerPixelGIRayCounts.z : PerPixelGIRayCounts.y;
   if (TextureSDF(data.voxelPosition) < 0.0) return 0.0;
 
-  float3 radiance = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, PerPixelGIRayCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
+  float3 radiance = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, (uint)sampleCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
 
 
   return radiance;

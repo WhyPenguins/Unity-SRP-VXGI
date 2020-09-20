@@ -19,6 +19,8 @@ public class VXGIRenderer : System.IDisposable {
   CullingResults _cullingResults;
   FilteringSettings _filteringSettings;
   LightingShader[] _lightingPasses;
+  LightingShader _lightingCombine;
+  LightingShader _lightingSpatialFilter;
   PostProcessRenderContext _postProcessRenderContext;
   RenderTargetBinding _gBufferBinding;
   ScriptableCullingParameters _cullingParameters;
@@ -40,8 +42,9 @@ public class VXGIRenderer : System.IDisposable {
 
     _renderScale = new float[] { 1f, 1f, 1f, 1f };
 
+    _lightingCombine = new LightingShader(LightingShader.Pass.Combine);
+    _lightingSpatialFilter = new LightingShader(LightingShader.Pass.Spatial);
     _lightingPasses = new LightingShader[] {
-      new LightingShader(LightingShader.Pass.Emission),
       new LightingShader(LightingShader.Pass.DirectDiffuseSpecular),
       new LightingShader(LightingShader.Pass.IndirectDiffuse),
       new LightingShader(LightingShader.Pass.IndirectSpecular)
@@ -304,7 +307,9 @@ public class VXGIRenderer : System.IDisposable {
       clipToWorldLast[camera] = new Matrix4x4();
     Matrix4x4 clipToWorld = camera.cameraToWorldMatrix * GL.GetGPUProjectionMatrix(camera.projectionMatrix, false).inverse;
 
-    _renderScale[2] = vxgi.diffuseResolutionScale;
+    _renderScale[0] = 1f;
+    _renderScale[1] = vxgi.diffuseResolutionScale;
+    _renderScale[2] = 1f;
 
     _command.BeginSample(_sampleRenderLighting);
     _command.SetGlobalMatrix(ShaderIDs.ClipToVoxel, vxgi.ColorVoxelizer.worldToVoxel * clipToWorld);
@@ -313,9 +318,37 @@ public class VXGIRenderer : System.IDisposable {
     _command.SetGlobalMatrix(ShaderIDs.VoxelToWorld, vxgi.ColorVoxelizer.voxelToWorld);
     _command.SetGlobalMatrix(ShaderIDs.WorldToVoxel, vxgi.ColorVoxelizer.worldToVoxel);
 
+    _command.GetTemporaryRT(ShaderIDs.LightingBuffer, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+    _command.GetTemporaryRT(ShaderIDs.LightingBufferSwap, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+
+    _command.SetRenderTarget(ShaderIDs.LightingBuffer);
+    _command.ClearRenderTarget(
+      false,
+      true,
+      Color.clear
+    );
+
     for (int i = 0; i < _lightingPasses.Length; i++) {
-      _lightingPasses[i].Execute(_command, camera, ShaderIDs.FrameBuffer, _renderScale[i]);
+      _lightingPasses[i].Execute(_command, camera, ShaderIDs.LightingBuffer, _renderScale[i]);
     }
+
+    int texCur = ShaderIDs.LightingBuffer;
+    int texOld = ShaderIDs.LightingBufferSwap;
+    float stepwidth = 1f;
+    for (int i = 0; i < vxgi.PerPixelSpatialFilterPasses; i++)
+    {
+      int texSwap = texCur;
+      texCur = texOld;
+      texOld = texSwap;
+      _command.SetGlobalTexture(ShaderIDs.LightingBuffer, texOld);
+      _command.SetGlobalFloat(ShaderIDs.stepwidth, stepwidth);
+      _lightingSpatialFilter.Execute(_command, camera, texCur, 1f);
+      stepwidth *= 2f;
+    }
+
+
+    _command.SetGlobalTexture(ShaderIDs.LightingBuffer, texCur);
+    _lightingCombine.Execute(_command, camera, ShaderIDs.FrameBuffer, 1f);
 
     _command.EndSample(_sampleRenderLighting);
     renderContext.ExecuteCommandBuffer(_command);

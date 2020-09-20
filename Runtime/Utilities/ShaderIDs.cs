@@ -27,6 +27,9 @@ internal static class ShaderIDs {
   internal static readonly int Displacement = Shader.PropertyToID("Displacement");
   internal static readonly int Dummy = Shader.PropertyToID("Dummy");
   internal static readonly int FrameBuffer = Shader.PropertyToID("FrameBuffer");
+  internal static readonly int LightingBuffer = Shader.PropertyToID("LightingBuffer");
+  internal static readonly int LightingBufferSwap = Shader.PropertyToID("LightingBufferSwap");
+  internal static readonly int stepwidth = Shader.PropertyToID("stepwidth");
   internal static readonly int IndirectDiffuseModifier = Shader.PropertyToID("IndirectDiffuseModifier");
   internal static readonly int IndirectSpecularModifier = Shader.PropertyToID("IndirectSpecularModifier");
   internal static readonly int LightCount = Shader.PropertyToID("LightCount");
@@ -56,10 +59,11 @@ internal static class ShaderIDs {
   internal static readonly int VXGI_VolumeSize = Shader.PropertyToID("VXGI_VolumeSize");
   internal static readonly int VXGI_VoxelFragmentsCountBuffer = Shader.PropertyToID("VXGI_VoxelFragmentsCountBuffer");
   internal static readonly int WorldToVoxel = Shader.PropertyToID("WorldToVoxel");
-  internal static readonly int PerPixelGIRayCount = Shader.PropertyToID("PerPixelGIRayCount");
+  internal static readonly int PerPixelGIRayCounts = Shader.PropertyToID("PerPixelGIRayCounts");
+  internal static readonly int PerPixelShadowRayCounts = Shader.PropertyToID("PerPixelShadowRayCounts");
   internal static readonly int PerVoxelGIRayCount = Shader.PropertyToID("PerVoxelGIRayCount");
   //Useful for stratified sampling
-  internal static readonly int PerPixelGIRayCountSqrt = Shader.PropertyToID("PerPixelGIRayCountSqrt");
+  internal static readonly int PerPixelGIRayCountsSqrt = Shader.PropertyToID("PerPixelGIRayCountsSqrt");
   internal static readonly int PerVoxelGIRayCountSqrt = Shader.PropertyToID("PerVoxelGIRayCountSqrt");
   internal static readonly int TempSkyColor = Shader.PropertyToID("TempSkyColor");
   internal static readonly int NoiseNum = Shader.PropertyToID("NoiseNum");
@@ -68,7 +72,5 @@ internal static class ShaderIDs {
   internal static readonly int ClipToWorldPrev = Shader.PropertyToID("ClipToWorldPrev");
   internal static readonly int _CameraDepthTexture_LastFrame = Shader.PropertyToID("_CameraDepthTexture_LastFrame");
   internal static readonly int NoiseRGB16bit = Shader.PropertyToID("NoiseRGB16bit");
-  internal static readonly int PerPixelGIRayAccumFrames = Shader.PropertyToID("PerPixelGIRayAccumFrames");
-  internal static readonly int PerPixelShadowRayAccumFrames = Shader.PropertyToID("PerPixelShadowRayAccumFrames");
   internal static readonly int SkyProbe = Shader.PropertyToID("SkyProbe");
 }

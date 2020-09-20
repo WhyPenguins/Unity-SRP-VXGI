@@ -35,9 +35,9 @@ public struct LightSource {
         else
         {
           if (extraInfo.shadowRayCount == VXGILight.ShadowRayCount.Dynamic)
-            radius = new Vector2(extraInfo.radius, Mathf.Min(extraInfo.dynamicModeMaxRays, (int)(Mathf.Max(1, Mathf.Sqrt(extraInfo.radius) * extraInfo.shadowRayPercentage * vxgi.PerPixelPerLightShadowRays))));
+            radius = new Vector2(extraInfo.radius, Mathf.Min(extraInfo.dynamicModeMaxRays, (int)(Mathf.Max(1, Mathf.Sqrt(extraInfo.radius) * extraInfo.shadowRayPercentage * vxgi.PerPixelShadowRays.Budget))));
           else
-            radius = new Vector2(extraInfo.radius, Mathf.Max(1, (int)(extraInfo.shadowRayPercentage * vxgi.PerPixelPerLightShadowRays)));
+            radius = new Vector2(extraInfo.radius, Mathf.Max(1, (int)(extraInfo.shadowRayPercentage * vxgi.PerPixelShadowRays.Target)));
         }
       }
     }

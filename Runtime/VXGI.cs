@@ -68,14 +68,67 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
 
   int VoxelizationNum = 0;
   int NoiseNum = 0;
-  public bool AnimateNoise = false;
+  public bool AnimateNoise = true;
   public bool AllowUnsafeValues = false;
-  public int PerPixelPerLightShadowRays = 5;
-  public int PerPixelGIRays = 4;
-  public int PerVoxelGIRays = 1;
 
-  public int PerPixelGIRayAccumFrames = 10;
-  public int PerPixelShadowRayAccumFrames = 3;
+  [Serializable]
+  public class RayCountSet
+  {
+    public int Target;
+    public int PotentialBudgetCatchup;
+    public int PotentialBudget;
+
+    public int BudgetCatchup
+    {
+      get
+      {
+        return PotentialBudgetCatchup < Target ? PotentialBudgetCatchup : Target;
+      }
+    }
+    public int Budget
+    {
+      get
+      {
+        return PotentialBudget < Target ? PotentialBudget : Target;
+      }
+    }
+
+    public bool MeetsTarget
+    {
+      get
+      {
+        return Budget == Target;
+      }
+    }
+
+    public Vector4 AsVector4
+    {
+      get
+      {
+        return new Vector4(Target, Budget, BudgetCatchup, 0);
+      }
+    }
+    public Vector4 AsVector4Sqrt
+    {
+      get
+      {
+        return new Vector4((int)Math.Sqrt(Target), (int)Math.Sqrt(Budget), (int)Math.Sqrt(BudgetCatchup), 0);
+      }
+    }
+
+    public RayCountSet(int target, int catchup, int budget)
+    {
+      Target = target;
+      PotentialBudgetCatchup = catchup;
+      PotentialBudget = budget;
+    }
+  };
+  public RayCountSet PerPixelGIRays = new RayCountSet(36,16,4);
+  public RayCountSet PerPixelShadowRays = new RayCountSet(5,2,2);
+
+  public int PerPixelSpatialFilterPasses = 4;
+
+  public int PerVoxelGIRays = 1;
 
   public Color AmbientColor;
 
@@ -104,7 +157,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   {
     get
     {
-      return PerPixelGIRayAccumFrames > 0 || PerPixelShadowRayAccumFrames > 0;
+      return !PerPixelGIRays.MeetsTarget || !PerPixelShadowRays.MeetsTarget;
     }
   }
 
@@ -120,11 +173,11 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   Parameterizer _parameterizer;
   //Vector3 _lastVoxelSpaceCenter;
 
+
   #region Rendering
   public void Render(ScriptableRenderContext renderContext, VXGIRenderer renderer) {
     Render(renderContext, _camera, renderer);
   }
-
   public void Render(ScriptableRenderContext renderContext, Camera camera, VXGIRenderer renderer) {
     bool RenderMeshes = camera.cameraType != CameraType.Reflection;
 
@@ -251,12 +304,11 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     _command.SetGlobalFloat(ShaderIDs.VXGI_VolumeExtent, .5f * bound);
     _command.SetGlobalFloat(ShaderIDs.VXGI_VolumeSize, bound);
     _command.SetGlobalFloat(ShaderIDs.NoiseNum, (float)NoiseNum);
-    _command.SetGlobalInt(ShaderIDs.PerPixelGIRayCount, PerPixelGIRays);
+    _command.SetGlobalVector(ShaderIDs.PerPixelGIRayCounts, PerPixelGIRays.AsVector4);
+    _command.SetGlobalVector(ShaderIDs.PerPixelShadowRayCounts, PerPixelShadowRays.AsVector4);
     _command.SetGlobalInt(ShaderIDs.PerVoxelGIRayCount, PerVoxelGIRays);
-    _command.SetGlobalInt(ShaderIDs.PerPixelGIRayCountSqrt, (int)Math.Sqrt(PerPixelGIRays));
+    _command.SetGlobalVector(ShaderIDs.PerPixelGIRayCountsSqrt, PerPixelGIRays.AsVector4Sqrt);
     _command.SetGlobalInt(ShaderIDs.PerVoxelGIRayCountSqrt, (int)Math.Sqrt(PerVoxelGIRays));
-    _command.SetGlobalFloat(ShaderIDs.PerPixelShadowRayAccumFrames, PerPixelShadowRayAccumFrames);
-    _command.SetGlobalFloat(ShaderIDs.PerPixelGIRayAccumFrames, PerPixelGIRayAccumFrames);
     _command.SetGlobalInt(ShaderIDs.Resolution, ColorVoxelizer.ColorStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.BinaryResolution, BinaryVoxelizer.BinaryStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.StepMapResolution, BinaryVoxelizer.StepMapper.StepMapStorageResolution.x);
@@ -286,7 +338,6 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     _mipmapper = new Mipmapper(this);
     _parameterizer = new Parameterizer();
     //_lastVoxelSpaceCenter = voxelSpaceCenter;
-
     UpdateStorage(true);
   }
 
@@ -385,26 +436,42 @@ public class VXGIEditor : Editor
     EditorGUILayout.LabelField("Lighting", EditorStyles.boldLabel);
     _vxgi.lightingMethod = (VXGI.LightingMethod)EditorGUILayout.EnumPopup(new GUIContent(""), _vxgi.lightingMethod, showEnumValue, true);// EditorGUILayout.EnumPopup(new GUIContent(""), myScript.lightingMethod, ShowEnumValue, false);
     _vxgi.diffuseResolutionScale = EditorGUILayout.Slider("Resolution Scale", _vxgi.diffuseResolutionScale, 0.1f, 1.0f);
-    _vxgi.throttleTracing = EditorGUILayout.Toggle("Throttle Tracing", _vxgi.throttleTracing);
+    _vxgi.throttleTracing = EditorGUILayout.Toggle("Throttle Voxelization", _vxgi.throttleTracing);
     if (_vxgi.throttleTracing)
-      _vxgi.tracingRate = EditorGUILayout.Slider("Tracing Rate", _vxgi.tracingRate, 1.0f, 100.0f);
+      _vxgi.tracingRate = EditorGUILayout.Slider("Voxelization Rate", _vxgi.tracingRate, 1.0f, 100.0f);
 
     _vxgi.voxelizationRate = EditorGUILayout.IntSlider("Voxelization Rate (every x frames)", _vxgi.voxelizationRate, 1, 30); ;
     if (_vxgi.lightingMethod == VXGI.LightingMethod.Rays)
     {
       _vxgi.AllowUnsafeValues = EditorGUILayout.Toggle("Allow Unsafe Values", _vxgi.AllowUnsafeValues);
 
-      EditorGUILayout.LabelField("Lighting - Per Pixel", EditorStyles.boldLabel);
-      _vxgi.PerPixelGIRays = SafeIntSlider("GI Quality", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays), 0, 10, _vxgi.AllowUnsafeValues);
-      _vxgi.PerPixelGIRays *= _vxgi.PerPixelGIRays;
-      _vxgi.PerPixelGIRayAccumFrames = SafeIntSlider("GI Temporal Samples", _vxgi.PerPixelGIRayAccumFrames, 0, 100, _vxgi.AllowUnsafeValues);
-      if (_vxgi.PerPixelGIRays == 0)
+      EditorGUILayout.LabelField("Lighting - Per Pixel GI", EditorStyles.boldLabel);
+
+      _vxgi.PerPixelGIRays.Target = SafeIntSlider("GI Quality Target", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays.Target), 0, 40, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelGIRays.Target *= _vxgi.PerPixelGIRays.Target;
+
+      _vxgi.PerPixelGIRays.PotentialBudgetCatchup = SafeIntSlider("GI Budget (Initial)", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays.PotentialBudgetCatchup), 1, 10, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelGIRays.PotentialBudgetCatchup *= _vxgi.PerPixelGIRays.PotentialBudgetCatchup;
+
+      _vxgi.PerPixelGIRays.PotentialBudget = SafeIntSlider("GI Budget (Update)", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays.PotentialBudget), 1, 10, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelGIRays.PotentialBudget *= _vxgi.PerPixelGIRays.Budget;
+
+      if (_vxgi.PerPixelGIRays.Target == 0)
         EditorGUILayout.LabelField("Per Pixel: Disabled");
       else
-        EditorGUILayout.LabelField("Per Pixel: " + _vxgi.PerPixelGIRays.ToString() + " rays");
+        EditorGUILayout.HelpBox("Per Pixel: Target " + _vxgi.PerPixelGIRays.Target.ToString() + " rays, usually throw " + _vxgi.PerPixelGIRays.Budget.ToString() + ", new areas get " + _vxgi.PerPixelGIRays.BudgetCatchup.ToString(), MessageType.Info);
 
-      _vxgi.PerPixelPerLightShadowRays = SafeIntSlider("Shadow Rays for light with radius 1", _vxgi.PerPixelPerLightShadowRays, 0, 20, _vxgi.AllowUnsafeValues);
-      _vxgi.PerPixelShadowRayAccumFrames = SafeIntSlider("Shadow Temporal Samples", _vxgi.PerPixelShadowRayAccumFrames, 0, 50, _vxgi.AllowUnsafeValues);
+      EditorGUILayout.LabelField("Lighting - Per Pixel Shadows (In terms of light with radius 1)", EditorStyles.boldLabel);
+      _vxgi.PerPixelShadowRays.Target = SafeIntSlider("Shadow Ray Target", _vxgi.PerPixelShadowRays.Target, 0, 10, _vxgi.AllowUnsafeValues);
+
+      //Shadows are almost noiseless anyway so I don't think there's a need for the extra complexity
+      //_vxgi.PerPixelShadowRays.PotentialBudgetCatchup = SafeIntSlider("Shadow Budget (Initial)", (int)Math.Sqrt((double)_vxgi.PerPixelShadowRays.PotentialBudgetCatchup), 1, 10, _vxgi.AllowUnsafeValues);
+      //_vxgi.PerPixelShadowRays.PotentialBudgetCatchup *= _vxgi.PerPixelShadowRays.PotentialBudgetCatchup;
+
+      _vxgi.PerPixelShadowRays.PotentialBudget = SafeIntSlider("Shadow Budget (Update)", _vxgi.PerPixelShadowRays.PotentialBudget, 1, 10, _vxgi.AllowUnsafeValues);
+
+      EditorGUILayout.LabelField("Lighting - Per Pixel (Global)", EditorStyles.boldLabel);
+      _vxgi.PerPixelSpatialFilterPasses = SafeIntSlider("Spatial Filter Passes", _vxgi.PerPixelSpatialFilterPasses, 0, 5, _vxgi.AllowUnsafeValues);
 
       EditorGUILayout.LabelField("Lighting - Per Voxel", EditorStyles.boldLabel);
       _vxgi.PerVoxelGIRays = SafeIntSlider("GI Quality", (int)Math.Sqrt((double)_vxgi.PerVoxelGIRays), 0, 5, _vxgi.AllowUnsafeValues);
@@ -428,7 +495,7 @@ public class VXGIEditor : Editor
         EditorGUILayout.HelpBox("Per-pixel samples must change each frame (animated noise) for temporal super-sampling to work.", MessageType.Warning);
       }
       GUI.enabled = true;
-      _vxgi.SkyProbe = (ReflectionProbe)EditorGUILayout.ObjectField("Sky Reflection Probe", (UnityEngine.Object)_vxgi.SkyProbe, typeof(ReflectionProbe));
+      _vxgi.SkyProbe = (ReflectionProbe)EditorGUILayout.ObjectField("Sky Reflection Probe", (UnityEngine.Object)_vxgi.SkyProbe, typeof(ReflectionProbe), true);
       //_vxgi.AmbientColor = EditorGUILayout.ColorField("Sky Color", _vxgi.AmbientColor);
       _vxgi.indirectDiffuseModifier = EditorGUILayout.FloatField("Indirect Diffuse Modifier", _vxgi.indirectDiffuseModifier);
       GUI.enabled = false;

@@ -47,7 +47,6 @@ public class VXGIRenderPipeline : RenderPipeline {
     var mainCamera = Camera.main;
 
     BeginFrameRendering(renderContext, cameras);
-
     foreach (var camera in cameras) {
       BeginCameraRendering(renderContext, camera);
       Camera.SetupCurrent(camera);

@@ -10,9 +10,11 @@
   uint Resolution;
   uint BinaryResolution;
   uint StepMapResolution;
-  uint PerPixelGIRayCount;
+  //For the counts: x = target count, y = up to date area count, z = new area count
+  float4 PerPixelGIRayCounts;
+  float4 PerPixelShadowRayCounts;
   uint PerVoxelGIRayCount;
-  uint PerPixelGIRayCountSqrt;
+  float4 PerPixelGIRayCountsSqrt;
   uint PerVoxelGIRayCountSqrt;
   /*UNITY_DECLARE_TEXCUBE(SpecularTex);*/TextureCube SkyProbe; SamplerState samplerSkyProbe;
   float NoiseNum;

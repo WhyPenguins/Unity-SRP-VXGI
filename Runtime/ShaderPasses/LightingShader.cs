@@ -5,10 +5,11 @@ using System.Collections.Generic;
 
 public class LightingShader {
   public enum Pass {
-    Emission = 0,
+    Combine = 0,
     DirectDiffuseSpecular = 1,
     IndirectDiffuse = 2,
-    IndirectSpecular = 3
+    IndirectSpecular = 3,
+    Spatial = 4
   }
 
   public static Material material {

@@ -25,8 +25,6 @@ Shader "Hidden/VXGI/Lighting"
     float4x4 _lastFrameViewProj;
 
 
-    float PerPixelShadowRayAccumFrames;
-    float PerPixelGIRayAccumFrames;
 
     LightingData ConstructLightingData(float4x4 ClipToWorld2, float2 uv, float depth)
     {
@@ -86,35 +84,41 @@ Shader "Hidden/VXGI/Lighting"
       info.samples = prevLighting.w;
       info.uv = previousUV;
       info.worldPosition = worldPosition;
-      return info;
-    }
-    TSSInfo TemporallyAccumulate(TSSInfo old, TSSInfo cur, float sampleLimit)
-    {
-      TSSInfo info;
-      info.samples = min(old.samples, sampleLimit);
-      if (dot(float3(1, 1, 1), old.uv - saturate(old.uv)) != 0)info.samples = 0;
+
+      
+      if (dot(float3(1, 1, 1), previousUV - saturate(previousUV)) != 0)info.samples = 0;
       if (info.samples > 0)
       {
-        float depth2 = _CameraDepthTexture_LastFrame.Sample(point_clamp_sampler, old.uv).r;
+        float depth2 = _CameraDepthTexture_LastFrame.Sample(point_clamp_sampler, previousUV).r;
         if (Linear01Depth(depth2) >= 1.0) {
           info.samples = 0;
         }
         else
         {
-          LightingData reprojdata = ConstructLightingData(ClipToWorldPrev, old.uv, depth2);
-          if (distance(reprojdata.worldPosition, old.worldPosition) > 0.1)//Should also check against normal, but that's just another pain to keep track of.
+          LightingData reprojdata = ConstructLightingData(ClipToWorldPrev, previousUV, depth2);
+          if (distance(reprojdata.worldPosition, info.worldPosition) > 0.1)//Should also check against normal, but that's just another pain to keep track of.
           {
             info.samples = 0;
           }
         }
       }
 
-      float factor = 1.0 / (1.0 + (info.samples));
+      return info;
+    }
+    TSSInfo TemporallyAccumulate(TSSInfo old, TSSInfo cur, float sampleLimit)
+    {
+      TSSInfo info;
+      info.samples = min(old.samples, sampleLimit);
+
+      float factor = 1.0 / max(1,(info.samples + cur.samples));
 
       info.worldPosition = cur.worldPosition;
       info.uv = cur.uv;
-      info.lighting = lerp(old.lighting.xyz, cur.lighting, factor);
-      info.samples += 1;
+
+      float2 weights = float2(info.samples, cur.samples) * factor;
+      info.lighting = (old.lighting.xyz * weights.x + cur.lighting * weights.y);
+
+      info.samples += cur.samples;
 
       return info;
     }
@@ -137,27 +141,32 @@ Shader "Hidden/VXGI/Lighting"
 
     Pass
     {
-      Name "Emission"
+      Name "Combine"
 
       HLSLPROGRAM
       #pragma vertex BlitVertex
       #pragma fragment frag
       #pragma multi_compile _ UNITY_HDR_ON
+      
+      Texture2D LightingBuffer;
 
-      float3 frag(BlitInput i) : SV_TARGET
+      output frag(BlitInput i) : SV_TARGET
       {
+        output o = DefaultO();
         float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
 
-        if (Linear01Depth(depth) >= 1.0) return 0.0;
+        if (Linear01Depth(depth) >= 1.0) return o;
 
         float3 emissiveColor = _CameraGBufferTexture3.Sample(point_clamp_sampler, i.uv);
+        float3 lighting = LightingBuffer.Sample(point_clamp_sampler, i.uv).rgb;
+        lighting *= _CameraGBufferTexture0.Sample(point_clamp_sampler, i.uv);
 
 #ifndef UNITY_HDR_ON
         // Decode value provided by built-in Unity g-buffer generator
         emissiveColor = -log2(emissiveColor);
 #endif
-
-        return emissiveColor;
+        o.combined = emissiveColor + lighting;
+        return o;
       }
       ENDHLSL
     }
@@ -180,16 +189,17 @@ Shader "Hidden/VXGI/Lighting"
         if (Linear01Depth(depth) >= 1.0) return o;
 
         LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
+        TSSInfo old = GetOldLighting(data.worldPosition);
+
         float3 lighting = DirectPixelRadiance(data);
 
 
-        TSSInfo old = GetOldLighting(data.worldPosition);
 
-        TSSInfo cur = MakeTSSInfo(data.worldPosition, 1, i.uv, lighting);
+        TSSInfo cur = MakeTSSInfo(data.worldPosition, PerPixelShadowRayCounts.y, i.uv, lighting);
 
-        TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelShadowRayAccumFrames);
+        TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelShadowRayCounts.x);
         o.lighting = float4(accum.lighting, accum.samples);
-        o.combined = data.diffuseColor * o.lighting.rgb;
+        o.combined = o.lighting.rgb;
         return o;
       }
       ENDHLSL
@@ -216,15 +226,18 @@ Shader "Hidden/VXGI/Lighting"
         if (Linear01Depth(depth) >= 1.0) o;
 
         LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
-        float3 lighting = IndirectDiffusePixelRadiance(data);
 
         TSSInfo old = GetOldLighting(data.worldPosition);
 
-        TSSInfo cur = MakeTSSInfo(data.worldPosition, 1, i.uv, lighting);
+        float samplesOutput = 0;
+        float3 lighting = IndirectDiffusePixelRadiance(data, old.samples < PerPixelGIRayCounts.x, samplesOutput);
 
-        TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelGIRayAccumFrames);
+
+        TSSInfo cur = MakeTSSInfo(data.worldPosition, samplesOutput, i.uv, lighting);
+
+        TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelGIRayCounts.x);
         o.lighting = float4(accum.lighting, accum.samples);
-        o.combined = IndirectDiffuseModifier * data.diffuseColor * o.lighting.rgb;
+        o.combined = IndirectDiffuseModifier * o.lighting.rgb;
 
         return o;
       }
@@ -253,6 +266,85 @@ Shader "Hidden/VXGI/Lighting"
       }
       ENDHLSL
     }
+
+
+      Blend Off
+      ZWrite Off
+
+      Pass
+      {
+        Name "Spatial"
+
+        HLSLPROGRAM
+        #pragma vertex BlitVertex
+        #pragma fragment frag
+        #pragma multi_compile _ UNITY_HDR_ON
+
+        Texture2D LightingBuffer;
+        float stepwidth = 1;
+
+        output frag(BlitInput i) : SV_TARGET
+        {
+          output o = DefaultO();
+
+          float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
+
+          if (Linear01Depth(depth) >= 1.0) return o;
+
+          LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
+
+
+
+          float3 lighting = LightingBuffer.Sample(point_clamp_sampler, i.uv).rgb;
+
+
+          float invstepwidth = 1.0 / (stepwidth * stepwidth);
+
+          float2 weightsPosNor = float2(-1, -1) / float2(0.01, 0.001);
+
+          float2 offset[] = { float2(-1.0, -1.0), float2(0.0, -1.0), float2(1.0, -1.0),
+            float2(-1.0, -0.0), float2(1.0, -0.0),
+            float2(-1.0, 1.0), float2(0.0, 1.0), float2(1.0, 1.0) };
+
+          float kernel[] = { 0.25 * 0.25, 0.375 * 0.25, 0.25 * 0.25,
+            0.25 * 0.375, 0.25 * 0.375,
+            0.25 * 0.25, 0.375 * 0.25, 0.25 * 0.25
+          };
+
+          float3 lightingsum = lighting * 0.375 * 0.375;
+          float totalWeight = 0.375 * 0.375;
+          float2 step = float2(1,1) / _ScreenParams.xy;
+
+          float2 iuv = i.uv;
+          [unroll]
+          for (int i = 0; i < 8; i++) {
+            float2 uv = iuv + offset[i] * step * stepwidth;
+
+            float sampledepth = _CameraDepthTexture.Sample(point_clamp_sampler, uv).r;
+            if (Linear01Depth(sampledepth) >= 1.0) continue;
+            LightingData sampledata = ConstructLightingData(ClipToWorld, uv, sampledepth);
+
+            float2 distPosNor;
+
+            float3 diff = data.vecN - sampledata.vecN;
+            distPosNor.x = dot(diff, diff) * invstepwidth;
+
+            diff = data.worldPosition - sampledata.worldPosition;
+            distPosNor.y = dot(diff, diff);
+
+            float2 sampleweights = saturate(exp(distPosNor * weightsPosNor));
+
+            float weight = sampleweights.x * sampleweights.y * kernel[i];
+            lightingsum += LightingBuffer.Sample(point_clamp_sampler, uv).rgb * weight;
+            totalWeight += weight;
+          }
+
+          o.combined = lightingsum.xyz / totalWeight;
+
+          return o;
+        }
+        ENDHLSL
+      }
   }
 
   Fallback Off

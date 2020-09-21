@@ -6,6 +6,7 @@ Shader "Hidden/VXGI/Lighting"
   }
 
   HLSLINCLUDE
+    #pragma multi_compile _ VXGI_AMBIENTCOLOR
     #include "UnityCG.cginc"
     #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/BlitSupport.hlsl"
     #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/Radiances/Pixel.cginc"

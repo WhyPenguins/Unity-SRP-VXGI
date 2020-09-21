@@ -16,9 +16,9 @@
   uint PerVoxelGIRayCount;
   float4 PerPixelGIRayCountsSqrt;
   uint PerVoxelGIRayCountSqrt;
-  /*UNITY_DECLARE_TEXCUBE(SpecularTex);*/TextureCube SkyProbe; SamplerState samplerSkyProbe;
+  /*UNITY_DECLARE_TEXCUBE(SpecularTex);*/TextureCube SkyProbe; SamplerState samplerSkyProbe; float4 SkyProbeHDRInfo;
   float NoiseNum;
-  float4 TempSkyColor;
+  float4 SkyColor;
   float BinaryVoxelSize;
   uint LightCount;
   float4x4 VoxelToWorld;

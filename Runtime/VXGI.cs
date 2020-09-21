@@ -130,7 +130,16 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
 
   public int PerVoxelGIRays = 1;
 
-  public Color AmbientColor;
+  public enum AmbientTypes
+  {
+    SceneProbe,
+    Probe,
+    Color,
+  };
+
+  public AmbientTypes AmbientType = AmbientTypes.Color;
+  public ReflectionProbe SkyProbe;
+  public Color AmbientColor = new Color(0f,0f,0f,0f);
 
   public bool resolutionPlusOne {
     get { return mipmapFilterMode == Mipmapper.Mode.Gaussian3x3x3; }
@@ -286,19 +295,38 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     {
       _command.DisableShaderKeyword("VXGI_APPROXIMATETWOSIDES");
     }
+    if (AmbientType == AmbientTypes.Color)
+    {
+      _command.EnableShaderKeyword("VXGI_AMBIENTCOLOR");
+    }
+    else
+    {
+      _command.DisableShaderKeyword("VXGI_AMBIENTCOLOR");
+    }
 
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
   }
-  public ReflectionProbe SkyProbe;
+
   void SetupShaderVariables(ScriptableRenderContext renderContext) {
     _command.SetGlobalTexture(ShaderIDs.Radiance[0], ColorVoxelizer.radiance);
     _command.SetGlobalTexture(ShaderIDs.StepMap, BinaryVoxelizer.StepMapper?.stepmap);
     _command.SetGlobalTexture(ShaderIDs.StepMapFine2x2x2Encode, BinaryVoxelizer.StepMapper?.StepMapFine2x2x2Encode);
     _command.SetGlobalTexture(ShaderIDs.Binary, BinaryVoxelizer.binary);
-    _command.SetGlobalTexture(ShaderIDs.SkyProbe, SkyProbe==null? null : SkyProbe.texture);
-
-    _command.SetGlobalColor(ShaderIDs.TempSkyColor, AmbientColor);
+    if (AmbientType == AmbientTypes.SceneProbe)
+    {
+      _command.SetGlobalTexture(ShaderIDs.SkyProbe, ReflectionProbe.defaultTexture);
+      _command.SetGlobalVector(ShaderIDs.SkyProbeHDRInfo, ReflectionProbe.defaultTextureHDRDecodeValues);
+    }
+    else if (AmbientType == AmbientTypes.Probe)
+    {
+      _command.SetGlobalTexture(ShaderIDs.SkyProbe, SkyProbe == null ? null : SkyProbe.texture);
+      _command.SetGlobalVector(ShaderIDs.SkyProbeHDRInfo, SkyProbe == null ? new Vector4(1f, 1f, 1f, 1f) : SkyProbe.textureHDRDecodeValues);
+    }
+    else if (AmbientType == AmbientTypes.Color)
+    {
+      _command.SetGlobalColor(ShaderIDs.SkyColor, AmbientColor);
+    }
     _command.SetGlobalFloat(ShaderIDs.IndirectDiffuseModifier, indirectDiffuseModifier);
     _command.SetGlobalFloat(ShaderIDs.IndirectSpecularModifier, indirectSpecularModifier);
     _command.SetGlobalFloat(ShaderIDs.VXGI_VolumeExtent, .5f * bound);
@@ -495,8 +523,17 @@ public class VXGIEditor : Editor
         EditorGUILayout.HelpBox("Per-pixel samples must change each frame (animated noise) for temporal super-sampling to work.", MessageType.Warning);
       }
       GUI.enabled = true;
-      _vxgi.SkyProbe = (ReflectionProbe)EditorGUILayout.ObjectField("Sky Reflection Probe", (UnityEngine.Object)_vxgi.SkyProbe, typeof(ReflectionProbe), true);
-      //_vxgi.AmbientColor = EditorGUILayout.ColorField("Sky Color", _vxgi.AmbientColor);
+      _vxgi.AmbientType = (VXGI.AmbientTypes)EditorGUILayout.EnumPopup("Ambient Type", _vxgi.AmbientType);
+
+      if (_vxgi.AmbientType == VXGI.AmbientTypes.Probe)
+      {
+        _vxgi.SkyProbe = (ReflectionProbe)EditorGUILayout.ObjectField("Sky Reflection Probe", (UnityEngine.Object)_vxgi.SkyProbe, typeof(ReflectionProbe), true);
+        if (_vxgi.SkyProbe == null)
+          EditorGUILayout.HelpBox("No Reflection Probe selected, defaulting to grey.", MessageType.Warning);
+      }
+      if (_vxgi.AmbientType == VXGI.AmbientTypes.Color)
+        _vxgi.AmbientColor = EditorGUILayout.ColorField("Ambient Color", _vxgi.AmbientColor);
+
       _vxgi.indirectDiffuseModifier = EditorGUILayout.FloatField("Indirect Diffuse Modifier", _vxgi.indirectDiffuseModifier);
       GUI.enabled = false;
         _vxgi.indirectSpecularModifier = EditorGUILayout.FloatField("Indirect Specular Modifier", _vxgi.indirectSpecularModifier);

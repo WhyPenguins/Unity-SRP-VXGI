@@ -22,6 +22,7 @@ Shader "Hidden/VXGI/Voxelization"
       #pragma multi_compile _ VXGI_COLOR
       #pragma multi_compile _ VXGI_BINARY
       #pragma multi_compile _ VXGI_APPROXIMATETWOSIDES
+      #pragma multi_compile _ VXGI_AMBIENTCOLOR
       #pragma shader_feature _EMISSION
       #pragma shader_feature_local _METALLICGLOSSMAP
       #pragma shader_feature_local _ _ALPHATEST_ON _ALPHABLEND_ON _ALPHAPREMULTIPLY_ON

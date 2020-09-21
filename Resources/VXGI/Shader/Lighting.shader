@@ -109,7 +109,8 @@ Shader "Hidden/VXGI/Lighting"
     TSSInfo TemporallyAccumulate(TSSInfo old, TSSInfo cur, float sampleLimit)
     {
       TSSInfo info;
-      info.samples = min(old.samples, sampleLimit);
+      //The max(...,0) shouldn't be neccessary (it implies a budget higher than target), but just in case for now.
+      info.samples = min(old.samples, max(sampleLimit - cur.samples, 0));
 
       float factor = 1.0 / max(1,(info.samples + cur.samples));
 

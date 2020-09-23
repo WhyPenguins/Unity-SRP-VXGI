@@ -14,6 +14,6 @@
 
   float3 DiffuseBRDF(LightingData data)
   {
-    return data.diffuseColor * DiffuseFresnel(data);
+    return DiffuseFresnel(data);
   }
 #endif

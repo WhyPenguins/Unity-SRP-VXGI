@@ -7,6 +7,9 @@ Shader "Hidden/VXGI/Lighting"
 
   HLSLINCLUDE
     #pragma multi_compile _ VXGI_AMBIENTCOLOR
+    #pragma multi_compile _ VXGI_TEMPORAL_DIFFUSE
+    #pragma multi_compile _ VXGI_TEMPORAL_SPECULAR
+    #pragma multi_compile _ VXGI_TEMPORAL_SEPARATE
     #include "UnityCG.cginc"
     #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/BlitSupport.hlsl"
     #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/Radiances/Pixel.cginc"
@@ -22,6 +25,8 @@ Shader "Hidden/VXGI/Lighting"
     Texture2D<float3> _CameraGBufferTexture3;
 
     Texture2D _previousLighting;
+    Texture2D _previousDiffuseLighting;
+    Texture2D _previousSpecularLighting;
 
     float4x4 _lastFrameViewProj;
 
@@ -43,7 +48,7 @@ Shader "Hidden/VXGI/Lighting"
       data.specularColor = gBuffer1.rgb;
       data.glossiness = gBuffer1.a;
 
-      data.vecN = mad(gBuffer2, 2.0, -1.0);
+      data.vecN = normalize(mad(gBuffer2, 2.0, -1.0));
       data.vecV = normalize(_WorldSpaceCameraPos - data.worldPosition);
 
       data.Initialize();
@@ -52,20 +57,74 @@ Shader "Hidden/VXGI/Lighting"
     }
 
 
-
+    struct PotentialOutput
+    {
+      float4 combinedFeedback;
+      float4 diffuseFeedback;
+      float4 specularFeedback;
+      float3 combinedSum;
+      float3 diffuseSum;
+      float3 specularSum;
+    };
     struct output
     {
-      float4 lighting : SV_TARGET0;
-      float3 combined : SV_TARGET1;
+      #ifdef VXGI_TEMPORAL_SEPARATE
+        float3 diffuseSum : SV_TARGET0;
+        float3 specularSum : SV_TARGET1;
+        #if defined(VXGI_TEMPORAL_DIFFUSE) && defined(VXGI_TEMPORAL_SPECULAR)
+          float4 diffuseFeedback : SV_TARGET2;
+          float4 specularFeedback : SV_TARGET3;
+        #endif
+        #if defined(VXGI_TEMPORAL_DIFFUSE) && !defined(VXGI_TEMPORAL_SPECULAR)
+          float4 diffuseFeedback : SV_TARGET2;
+        #endif
+        #if !defined(VXGI_TEMPORAL_DIFFUSE) && defined(VXGI_TEMPORAL_SPECULAR)
+          float4 specularFeedback : SV_TARGET2;
+        #endif
+      #else
+        float3 combinedSum : SV_TARGET0;
+        #if defined(VXGI_TEMPORAL_DIFFUSE)
+          float4 combinedFeedback : SV_TARGET1;
+        #endif
+      #endif
     };
-    output DefaultO()
+    output MakeOutput(PotentialOutput po)
     {
       output o;
-      o.lighting = float4(0,0,0,0);
-      o.combined = float3(0,0,0);
+      #ifdef VXGI_TEMPORAL_SEPARATE
+        o.diffuseSum = po.diffuseSum;
+        o.specularSum = po.specularSum;
+        #if defined(VXGI_TEMPORAL_DIFFUSE)
+          o.diffuseFeedback = po.diffuseFeedback;
+        #endif
+        #if defined(VXGI_TEMPORAL_SPECULAR)
+          o.specularFeedback = po.specularFeedback;
+        #endif
+      #else
+        o.combinedSum = po.combinedSum;
+        #if defined(VXGI_TEMPORAL_DIFFUSE)
+          o.combinedFeedback = po.combinedFeedback;
+        #endif
+      #endif
       return o;
     }
+    PotentialOutput DefaultPO()
+    {
+      PotentialOutput po;
+      po.combinedFeedback = float4(0, 0, 0, 0);
+      po.diffuseFeedback = float4(0, 0, 0, 0);
+      po.specularFeedback = float4(0, 0, 0, 0);
+      po.combinedSum = float3(0, 0, 0);
+      po.diffuseSum = float3(0, 0, 0);
+      po.specularSum = float3(0, 0, 0);
+      return po;
+    }
 
+#if UNITY_UV_STARTS_AT_TOP
+  #define UV_FLIP i.uv.y = 1.0 - i.uv.y;
+#else
+  #define UV_FLIP
+#endif
     struct TSSInfo
     {
       float3 lighting;
@@ -73,7 +132,7 @@ Shader "Hidden/VXGI/Lighting"
       float2 uv;
       float3 worldPosition;
     };
-    TSSInfo GetOldLighting(float3 worldPosition)
+    TSSInfo GetOldLighting(Texture2D _previousLighting, float3 worldPosition)
     {
       float4 previousProj = mul(_lastFrameViewProj, float4(worldPosition, 1));
       float2 previousUV = previousProj.xy / previousProj.w;
@@ -86,26 +145,72 @@ Shader "Hidden/VXGI/Lighting"
       info.uv = previousUV;
       info.worldPosition = worldPosition;
 
-      
-      if (dot(float3(1, 1, 1), previousUV - saturate(previousUV)) != 0)info.samples = 0;
-      if (info.samples > 0)
-      {
-        float depth2 = _CameraDepthTexture_LastFrame.Sample(point_clamp_sampler, previousUV).r;
-        if (Linear01Depth(depth2) >= 1.0) {
-          info.samples = 0;
-        }
-        else
+        if (dot(float3(1, 1, 1), previousUV - saturate(previousUV)) != 0)info.samples = 0;
+        if (info.samples > 0)
         {
-          LightingData reprojdata = ConstructLightingData(ClipToWorldPrev, previousUV, depth2);
-          if (distance(reprojdata.worldPosition, info.worldPosition) > 0.1)//Should also check against normal, but that's just another pain to keep track of.
-          {
+          float depth2 = _CameraDepthTexture_LastFrame.Sample(point_clamp_sampler, previousUV).r;
+          if (Linear01Depth(depth2) >= 1.0) {
             info.samples = 0;
           }
+          else
+          {
+            LightingData reprojdata = ConstructLightingData(ClipToWorldPrev, previousUV, depth2);
+            if (distance(reprojdata.worldPosition, info.worldPosition) > 0.1)//Should also check against normal, but that's just another pain to keep track of.
+            {
+              info.samples = 0;
+            }
+          }
         }
-      }
 
       return info;
     }
+
+
+
+    TSSInfo GetOldLighting(Texture2D _previousLighting, float3 samplePosition, float3 worldPosition)
+    {
+      float4 previousProj = mul(_lastFrameViewProj, float4(worldPosition, 1));
+      float2 previousUV = previousProj.xy / previousProj.w;
+      previousUV = previousUV * 0.5 + 0.5;
+      float4 prevLighting = _previousLighting.Sample(point_clamp_sampler, float2(previousUV.x, previousUV.y));
+
+      TSSInfo info;
+      info.lighting = prevLighting.rgb;
+      info.samples = prevLighting.w;
+      info.uv = previousUV;
+      info.worldPosition = worldPosition;
+
+      float4 previousSampleProj = mul(_lastFrameViewProj, float4(samplePosition, 1));
+      float2 previousSampleUV = previousSampleProj.xy / previousSampleProj.w;
+      previousSampleUV = previousSampleUV * 0.5 + 0.5;
+
+        if (dot(float3(1, 1, 1), previousSampleUV - saturate(previousSampleUV)) != 0)info.samples = 0;
+        if (info.samples > 0)
+        {
+          float depth2 = _CameraDepthTexture_LastFrame.Sample(point_clamp_sampler, previousSampleUV).r;
+          if (Linear01Depth(depth2) >= 1.0) {
+            info.samples = 0;
+          }
+          else
+          {
+            LightingData reprojdata = ConstructLightingData(ClipToWorldPrev, previousSampleUV, depth2);
+            if (distance(reprojdata.worldPosition, samplePosition) > 0.1)//Should also check against normal, but that's just another pain to keep track of.
+            {
+              info.samples = 0;
+            }
+          }
+        }
+
+      return info;
+    }
+
+
+
+
+
+
+
+
     TSSInfo TemporallyAccumulate(TSSInfo old, TSSInfo cur, float sampleLimit)
     {
       TSSInfo info;
@@ -151,24 +256,30 @@ Shader "Hidden/VXGI/Lighting"
       #pragma multi_compile _ UNITY_HDR_ON
       
       Texture2D LightingBuffer;
+      Texture2D DiffuseBuffer;
+      Texture2D SpecularBuffer;
 
-      output frag(BlitInput i) : SV_TARGET
+      output frag(BlitInput i)
       {
-        output o = DefaultO();
+        UV_FLIP
+
+        PotentialOutput o = DefaultPO();
         float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
 
-        if (Linear01Depth(depth) >= 1.0) return o;
+        if (Linear01Depth(depth) >= 1.0) return MakeOutput(o);
 
         float3 emissiveColor = _CameraGBufferTexture3.Sample(point_clamp_sampler, i.uv);
-        float3 lighting = LightingBuffer.Sample(point_clamp_sampler, i.uv).rgb;
-        lighting *= _CameraGBufferTexture0.Sample(point_clamp_sampler, i.uv);
+        float3 diffuse = DiffuseBuffer.Sample(point_clamp_sampler, i.uv).rgb;
+        diffuse *= _CameraGBufferTexture0.Sample(point_clamp_sampler, i.uv);
+
+        float3 specular = SpecularBuffer.Sample(point_clamp_sampler, i.uv).rgb;
 
 #ifndef UNITY_HDR_ON
         // Decode value provided by built-in Unity g-buffer generator
         emissiveColor = -log2(emissiveColor);
 #endif
-        o.combined = emissiveColor + lighting;
-        return o;
+        o.combinedSum = emissiveColor + diffuse + specular;
+        return MakeOutput(o);
       }
       ENDHLSL
     }
@@ -185,24 +296,31 @@ Shader "Hidden/VXGI/Lighting"
 
       output frag(BlitInput i)
       {
-        output o = DefaultO();
+        UV_FLIP
+        PotentialOutput o = DefaultPO();
         float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
 
-        if (Linear01Depth(depth) >= 1.0) return o;
+        if (Linear01Depth(depth) >= 1.0) return MakeOutput(o);
 
         LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
-        TSSInfo old = GetOldLighting(data.worldPosition);
+        TSSInfo old = GetOldLighting(_previousDiffuseLighting, data.worldPosition);
 
-        float3 lighting = DirectPixelRadiance(data);
+        float3 specular;
+        float3 diffuse;
+        DirectPixelRadiance(data, diffuse, specular);
 
 
 
-        TSSInfo cur = MakeTSSInfo(data.worldPosition, PerPixelShadowRayCounts.y, i.uv, lighting);
+        TSSInfo cur = MakeTSSInfo(data.worldPosition, max(1, PerPixelShadowRayCounts.y), i.uv, diffuse);
 
         TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelShadowRayCounts.x);
-        o.lighting = float4(accum.lighting, accum.samples);
-        o.combined = o.lighting.rgb;
-        return o;
+        o.diffuseFeedback = float4(accum.lighting, accum.samples);
+        o.diffuseSum = o.diffuseFeedback.rgb;
+        o.specularFeedback = float4(specular, 1);
+        o.specularSum = specular;
+        o.combinedFeedback = o.diffuseFeedback;
+        o.combinedSum = o.diffuseSum;
+        return MakeOutput(o);
       }
       ENDHLSL
     }
@@ -216,55 +334,55 @@ Shader "Hidden/VXGI/Lighting"
       #pragma fragment frag
       #pragma multi_compile _ VXGI_ANISOTROPIC_VOXEL
       #pragma multi_compile _ VXGI_CASCADES
+      #pragma multi_compile _ VXGI_TEMPORAL_EXPERIMENTALSPECULAR
 
       float IndirectDiffuseModifier;
+      float IndirectSpecularModifier;
 
 
       output frag(BlitInput i)
       {
-        output o = DefaultO();
+        UV_FLIP
+        PotentialOutput o = DefaultPO();
         float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
 
-        if (Linear01Depth(depth) >= 1.0) o;
+        if (Linear01Depth(depth) >= 1.0) return MakeOutput(o);
 
         LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
 
-        TSSInfo old = GetOldLighting(data.worldPosition);
+        TSSInfo old = GetOldLighting(_previousDiffuseLighting, data.worldPosition);
 
         float samplesOutput = 0;
-        float3 lighting = IndirectDiffusePixelRadiance(data, old.samples < PerPixelGIRayCounts.x, samplesOutput);
+        float3 specular;
+        float3 diffuse;
+        float3 specularHitPosAvg;
+        IndirectPixelRadiance(data, old.samples < PerPixelGIRayCounts.x, samplesOutput, diffuse, specular, specularHitPosAvg);
 
 
-        TSSInfo cur = MakeTSSInfo(data.worldPosition, samplesOutput, i.uv, lighting);
-
+        TSSInfo cur = MakeTSSInfo(data.worldPosition, samplesOutput, i.uv, diffuse);
         TSSInfo accum = TemporallyAccumulate(old, cur, PerPixelGIRayCounts.x);
-        o.lighting = float4(accum.lighting, accum.samples);
-        o.combined = IndirectDiffuseModifier * o.lighting.rgb;
 
-        return o;
-      }
-      ENDHLSL
-    }
+#ifdef VXGI_TEMPORAL_EXPERIMENTALSPECULAR
+        specularHitPosAvg = data.worldPosition - data.vecV * distance(specularHitPosAvg, data.worldPosition);
+        TSSInfo oldSpec = GetOldLighting(_previousSpecularLighting, data.worldPosition, specularHitPosAvg);
+#else
+        TSSInfo oldSpec = GetOldLighting(_previousSpecularLighting, data.worldPosition);
+#endif
+        TSSInfo curSpec = MakeTSSInfo(data.worldPosition, samplesOutput, i.uv, specular);
+        TSSInfo accumSpec = TemporallyAccumulate(oldSpec, curSpec, PerPixelGIRayCounts.x);
 
-    Pass
-    {
-      Name "IndirectSpecular"
+        float4 previousProj = mul(_lastFrameViewProj, float4(specularHitPosAvg, 1));
+        float2 previousUV = previousProj.xy / previousProj.w;
+        previousUV = previousUV * 0.5 + 0.5;
 
-      HLSLPROGRAM
-      #pragma vertex BlitVertex
-      #pragma fragment frag
-      #pragma multi_compile _ VXGI_ANISOTROPIC_VOXEL
-      #pragma multi_compile _ VXGI_CASCADES
+        o.diffuseFeedback = float4(accum.lighting, accum.samples);
+        o.diffuseSum = IndirectDiffuseModifier * o.diffuseFeedback.rgb;
+        o.specularFeedback = float4(accumSpec.lighting, accumSpec.samples);
+        o.specularSum = IndirectSpecularModifier * o.specularFeedback.rgb;
+        o.combinedFeedback = o.diffuseFeedback;
+        o.combinedSum = o.diffuseSum;
 
-      float IndirectSpecularModifier;
-
-      float3 frag(BlitInput i) : SV_TARGET
-      {
-        float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
-
-        if (Linear01Depth(depth) >= 1.0) return 0.0;
-
-        return IndirectSpecularModifier * IndirectSpecularPixelRadiance(ConstructLightingData(ClipToWorld, i.uv, depth));
+        return MakeOutput(o);
       }
       ENDHLSL
     }
@@ -282,22 +400,23 @@ Shader "Hidden/VXGI/Lighting"
         #pragma fragment frag
         #pragma multi_compile _ UNITY_HDR_ON
 
-        Texture2D LightingBuffer;
+        Texture2D DiffuseBuffer;
         float stepwidth = 1;
 
-        output frag(BlitInput i) : SV_TARGET
+        output frag(BlitInput i)
         {
-          output o = DefaultO();
+          UV_FLIP
+          PotentialOutput o = DefaultPO();
 
           float depth = _CameraDepthTexture.Sample(point_clamp_sampler, i.uv).r;
 
-          if (Linear01Depth(depth) >= 1.0) return o;
+          if (Linear01Depth(depth) >= 1.0) return MakeOutput(o);
 
           LightingData data = ConstructLightingData(ClipToWorld, i.uv, depth);
 
 
 
-          float3 lighting = LightingBuffer.Sample(point_clamp_sampler, i.uv).rgb;
+          float3 lighting = DiffuseBuffer.Sample(point_clamp_sampler, i.uv).rgb;
 
 
           float invstepwidth = 1.0 / (stepwidth * stepwidth);
@@ -337,13 +456,13 @@ Shader "Hidden/VXGI/Lighting"
             float2 sampleweights = saturate(exp(distPosNor * weightsPosNor));
 
             float weight = sampleweights.x * sampleweights.y * kernel[i];
-            lightingsum += LightingBuffer.Sample(point_clamp_sampler, uv).rgb * weight;
+            lightingsum += DiffuseBuffer.Sample(point_clamp_sampler, uv).rgb * weight;
             totalWeight += weight;
           }
 
-          o.combined = lightingsum.xyz / totalWeight;
+          o.combinedSum = lightingsum.xyz / totalWeight;
 
-          return o;
+          return MakeOutput(o);
         }
         ENDHLSL
       }

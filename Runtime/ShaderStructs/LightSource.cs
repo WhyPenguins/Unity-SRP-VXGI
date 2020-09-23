@@ -26,7 +26,7 @@ public struct LightSource {
     radius = new Vector2(0, 0);
     if (extraInfo != null)
     {
-      if (extraInfo.shadowRayPercentage > 0)
+      if (extraInfo.shadowRayPercentage > 0 && (vxgi==null||vxgi.PerPixelShadowRays.Budget>0))
       {
         if (vxgi == null)
         {

@@ -40,14 +40,13 @@ public class VXGIRenderer : System.IDisposable {
       ShaderIDs._CameraDepthTexture, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.DontCare
     );
 
-    _renderScale = new float[] { 1f, 1f, 1f, 1f };
+    _renderScale = new float[] { 1f, 1f };
 
-    _lightingCombine = new LightingShader(LightingShader.Pass.Combine);
-    _lightingSpatialFilter = new LightingShader(LightingShader.Pass.Spatial);
+    _lightingCombine = new LightingShader(LightingShader.Pass.Combine, false, false);
+    _lightingSpatialFilter = new LightingShader(LightingShader.Pass.Spatial, false, false);
     _lightingPasses = new LightingShader[] {
-      new LightingShader(LightingShader.Pass.DirectDiffuseSpecular),
-      new LightingShader(LightingShader.Pass.IndirectDiffuse),
-      new LightingShader(LightingShader.Pass.IndirectSpecular)
+      new LightingShader(LightingShader.Pass.DirectDiffuseSpecular, true, false),
+      new LightingShader(LightingShader.Pass.IndirectDiffuseSpecular, true, true),
     };
 
     _lightSources = new ComputeBuffer(128, LightSource.size);
@@ -283,7 +282,8 @@ public class VXGIRenderer : System.IDisposable {
     _command.Clear();
   }
 
-  void RenderGBuffers(ScriptableRenderContext renderContext, Camera camera) {
+  void RenderGBuffers(ScriptableRenderContext renderContext, Camera camera)
+  {
     var sortingSettings = new SortingSettings(camera) { criteria = SortingCriteria.CommonOpaque };
     var drawingSettings = new DrawingSettings(ShaderTagIDs.Deferred, sortingSettings) { perObjectData = RenderPipeline.PerObjectData };
 
@@ -309,7 +309,6 @@ public class VXGIRenderer : System.IDisposable {
 
     _renderScale[0] = 1f;
     _renderScale[1] = vxgi.diffuseResolutionScale;
-    _renderScale[2] = 1f;
 
     _command.BeginSample(_sampleRenderLighting);
     _command.SetGlobalMatrix(ShaderIDs.ClipToVoxel, vxgi.ColorVoxelizer.worldToVoxel * clipToWorld);
@@ -318,10 +317,11 @@ public class VXGIRenderer : System.IDisposable {
     _command.SetGlobalMatrix(ShaderIDs.VoxelToWorld, vxgi.ColorVoxelizer.voxelToWorld);
     _command.SetGlobalMatrix(ShaderIDs.WorldToVoxel, vxgi.ColorVoxelizer.worldToVoxel);
 
-    _command.GetTemporaryRT(ShaderIDs.LightingBuffer, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+    _command.GetTemporaryRT(ShaderIDs.DiffuseBuffer, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
+    _command.GetTemporaryRT(ShaderIDs.SpecularBuffer, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
     _command.GetTemporaryRT(ShaderIDs.LightingBufferSwap, camera.pixelWidth, camera.pixelHeight, 0, FilterMode.Point, RenderTextureFormat.ARGBHalf, RenderTextureReadWrite.Linear);
 
-    _command.SetRenderTarget(ShaderIDs.LightingBuffer);
+    _command.SetRenderTarget(new RenderTargetIdentifier[2]{ ShaderIDs.DiffuseBuffer, ShaderIDs.SpecularBuffer }, ShaderIDs.DiffuseBuffer);
     _command.ClearRenderTarget(
       false,
       true,
@@ -329,26 +329,42 @@ public class VXGIRenderer : System.IDisposable {
     );
 
     for (int i = 0; i < _lightingPasses.Length; i++) {
-      _lightingPasses[i].Execute(_command, camera, ShaderIDs.LightingBuffer, _renderScale[i]);
+      _lightingPasses[i].Execute(_command, camera, ShaderIDs.DiffuseBuffer, ShaderIDs.SpecularBuffer, _renderScale[i]);
     }
 
-    int texCur = ShaderIDs.LightingBuffer;
-    int texOld = ShaderIDs.LightingBufferSwap;
+    int diffusetexCur = ShaderIDs.DiffuseBuffer;
+    int diffusetexOld = ShaderIDs.LightingBufferSwap;
     float stepwidth = 1f;
-    for (int i = 0; i < vxgi.PerPixelSpatialFilterPasses; i++)
+    for (int i = 0; i < vxgi.PerPixelDiffuseSpatialFilterPasses; i++)
     {
-      int texSwap = texCur;
-      texCur = texOld;
-      texOld = texSwap;
-      _command.SetGlobalTexture(ShaderIDs.LightingBuffer, texOld);
+      int texSwap = diffusetexCur;
+      diffusetexCur = diffusetexOld;
+      diffusetexOld = texSwap;
+      _command.SetGlobalTexture(ShaderIDs.DiffuseBuffer, diffusetexOld);
       _command.SetGlobalFloat(ShaderIDs.stepwidth, stepwidth);
-      _lightingSpatialFilter.Execute(_command, camera, texCur, 1f);
+      _lightingSpatialFilter.Execute(_command, camera, diffusetexCur, diffusetexCur, 1f);
       stepwidth *= 2f;
     }
 
 
-    _command.SetGlobalTexture(ShaderIDs.LightingBuffer, texCur);
-    _lightingCombine.Execute(_command, camera, ShaderIDs.FrameBuffer, 1f);
+    int speculartexCur = ShaderIDs.SpecularBuffer;
+    int speculartexOld = diffusetexOld;
+    stepwidth = 1f;
+    for (int i = 0; i < vxgi.PerPixelSpecularSpatialFilterPasses; i++)
+    {
+      int texSwap = speculartexCur;
+      speculartexCur = speculartexOld;
+      speculartexOld = texSwap;
+      _command.SetGlobalTexture(ShaderIDs.DiffuseBuffer, speculartexOld);
+      _command.SetGlobalFloat(ShaderIDs.stepwidth, stepwidth);
+      _lightingSpatialFilter.Execute(_command, camera, speculartexCur, speculartexCur, 1f);
+      stepwidth *= 2f;
+    }
+
+
+    _command.SetGlobalTexture(ShaderIDs.DiffuseBuffer, diffusetexCur);
+    _command.SetGlobalTexture(ShaderIDs.SpecularBuffer, speculartexCur);
+    _lightingCombine.Execute(_command, camera, ShaderIDs.FrameBuffer, ShaderIDs.FrameBuffer, 1f);
 
     _command.EndSample(_sampleRenderLighting);
     renderContext.ExecuteCommandBuffer(_command);

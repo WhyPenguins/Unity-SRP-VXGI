@@ -77,7 +77,7 @@ struct raycastResult
   }
 };
 
-raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float maxVoxelDist)
+raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float maxVoxelDist, bool interpolateColor)
 {
   raycastResult result;
   [unroll]
@@ -162,10 +162,15 @@ raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float max
   }
 
   //Better results when resolution's don't match, but surprisingly slower
-  //result.color = Radiance0.SampleLevel(RADIANCE_SAMPLER, normPos, 0.0);
-  //result.color.rgb /= max(0.001, result.color.a);
-
-  result.color = Radiance0.Load(uint4(normPos * Resolution, 0));
+  if (interpolateColor)
+  {
+    result.color = Radiance0.SampleLevel(RADIANCE_SAMPLER, normPos, 0.0);
+    result.color.rgb /= max(0.001, result.color.a);
+  }
+  else
+  {
+    result.color = Radiance0.Load(uint4(normPos * Resolution, 0));
+  }
 
   result.sky = false;
   result.distlimit = false;
@@ -175,12 +180,16 @@ raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float max
 
   return result;
 }
-
+raycastResult VoxelRaycast(float3 rayPos, float3 rayDir, int maxSteps, float maxVoxelDist)
+{
+  return VoxelRaycast(rayPos, rayDir, maxSteps, maxVoxelDist, false);
+}
 float3 CalcBiasPosition(float3 worldPos, float3 rayDir, float3 worldNor)
 {
   //Ad-hoc ray bias to remove self intersection due to the voxels being kinda big...
-  return worldPos + (rayDir / max(0.3, dot(worldNor, rayDir)) * BinaryVoxelSize * 0.75 + worldNor * BinaryVoxelSize * 0.75);
-
+  //return worldPos + (rayDir / max(0.3, dot(worldNor, rayDir)) * BinaryVoxelSize * 1.5 + worldNor * BinaryVoxelSize * 1.5);
+  //Actually this has much less light leaking
+  return worldPos + (rayDir + worldNor) * BinaryVoxelSize;//BinaryVoxelSize * 2.3;//1.4;
   //Something along these lines should be best but currently it has artifacts and leaking problems
   /*float3 voxelPos = (worldPos - VXGI_VolumeMin) / VXGI_VolumeSize * BinaryResolution;
   float3 voxelRel = step(0, worldNor) - frac(voxelPos);
@@ -197,13 +206,21 @@ float3 CalcBiasPosition(float3 worldPos, float3 rayDir, float3 worldNor)
   return worldPos;*/
 }
 //Raycast after biasing ray outwards to avoid intersection
-raycastResult VoxelRaycastBias(float3 worldPos, float3 rayDir, float3 worldNor, float maxSteps)
+raycastResult VoxelRaycastBias(float3 worldPos, float3 rayDir, float3 worldNor, float maxSteps, float maxVoxelDist, bool interpolateColor)
 {
-  return VoxelRaycast(CalcBiasPosition(worldPos, rayDir, worldNor), rayDir, maxSteps, 0);
+  return VoxelRaycast(CalcBiasPosition(worldPos, rayDir, worldNor), rayDir, maxSteps, maxVoxelDist, interpolateColor);
 }
 raycastResult VoxelRaycastBias(float3 worldPos, float3 rayDir, float3 worldNor, float maxSteps, float maxVoxelDist)
 {
-  return VoxelRaycast(CalcBiasPosition(worldPos, rayDir, worldNor), rayDir, maxSteps, maxVoxelDist);
+  return VoxelRaycastBias(worldPos, rayDir, worldNor, maxSteps, maxVoxelDist, false);
+}
+raycastResult VoxelRaycastBias(float3 worldPos, float3 rayDir, float3 worldNor, float maxSteps)
+{
+  return VoxelRaycastBias(worldPos, rayDir, worldNor, maxSteps, 0);
+}
+raycastResult VoxelRaycastBias(float3 worldPos, float3 rayDir, float3 worldNor, float maxSteps, bool interpolateColor)
+{
+  return VoxelRaycastBias(worldPos, rayDir, worldNor, maxSteps, 0, interpolateColor);
 }
 
 float3 StratifiedHemisphereSample(float3 worldPos, float3 worldNor, int maxSteps, uint qual, float rand)
@@ -228,6 +245,74 @@ float3 StratifiedHemisphereSample(float3 worldPos, float3 worldNor, int maxSteps
   radiance /= samples;
 
   return radiance;
+}
+float3 StratifiedSpecularSample(float roughness, float3 reflNor, float3 worldPos, float3 worldNor, int maxSteps, uint qual, float rand)
+{
+  if (qual <= 0)return float3(0, 0, 0);
+  int samples = qual * qual;
+  //Create rotation basis for hemisphere 
+  //(so I can generate random directions on a hemisphere then rotate them to follow the normal)
+  float3x3 normalBasis = GenerateNormalBasis(reflNor);
+
+  float3 radiance = 0;
+  [loop]
+  for (int s = 0; s < samples; s++)
+  {
+    rand += 0.0267;
+    //Rotate a random hemisphere sample into the normal basis
+    float2 rands = hash2(rand);
+    float3 castdir = normalize(mul(HemisphereCosineSample(float2(stratify(rands.x, qual, s % qual), stratify(rands.y, qual, s / qual))) * float3(roughness, roughness,1), normalBasis));
+    float3 col = VoxelRaycastBias(worldPos, castdir, worldNor, maxSteps).color.rgb;
+    radiance += col;
+  }
+  radiance /= samples;
+
+  return radiance;
+}
+void StratifiedHemisphereSpecularSample(float specularity, float roughness, float3 reflNor, float3 worldPos, float3 worldNor, int maxDiffuseSteps, int maxSpecularSteps, uint qual, float rand, out float3 diffuse, out float3 specular, out float3 specularHitPosAvg)
+{
+  diffuse = 0;
+  float diffuseCount = 0;
+  specular = 0;
+  float specularCount = 0;
+  if (qual <= 0) return;
+  int samples = qual * qual;
+  //Create rotation basis for hemisphere 
+  //(so I can generate random directions on a hemisphere then rotate them to follow the normal)
+  float3x3 normalBasis = GenerateNormalBasis(worldNor);
+  float3x3 reflectionBasis = GenerateNormalBasis(reflNor);
+
+  float hitPosSamps = 0;
+  specularHitPosAvg = 0;
+  [loop]
+  for (int s = 0; s < samples; s++)
+  {
+    rand += 0.0267;
+    //Rotate a random hemisphere sample into the normal basis
+    float2 rands = hash2(rand);
+    float3 castdir;
+    bool isSpecularRay = (hash(rand + 1) < specularity);
+    if (isSpecularRay)
+      castdir  = normalize(mul(HemisphereCosineSample(float2(stratify(rands.x, qual, s % qual), stratify(rands.y, qual, s / qual))) * float3(roughness, roughness, 1), reflectionBasis));
+    else
+      castdir  = normalize(mul(HemisphereCosineSample(float2(stratify(rands.x, qual, s % qual), stratify(rands.y, qual, s / qual))), normalBasis));
+    raycastResult res = VoxelRaycastBias(worldPos, castdir, worldNor, isSpecularRay?maxSpecularSteps:maxDiffuseSteps);
+    float3 col = res.color.rgb;
+    if (isSpecularRay)
+    {
+      specular += col;
+      specularHitPosAvg += res.position;
+      hitPosSamps += 1;
+    }
+    else
+    {
+      diffuse += col;
+    }
+  }
+  diffuse /= samples;
+  specular /= samples;
+  if (hitPosSamps > 0)specularHitPosAvg /= hitPosSamps;
+  else specularHitPosAvg = worldPos;
 }
 
 #endif

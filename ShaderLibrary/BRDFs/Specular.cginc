@@ -27,6 +27,6 @@
 
   float3 SpecularBRDF(LightingData data)
   {
-    return SpecularNDF(data) * SpecularGSF(data) * SpecularFresnel(data) / (4.0 * data.NdotL * data.NdotV);
+    return SpecularNDF(data) * SpecularGSF(data)* SpecularFresnel(data) / max(0.01, 4.0 * data.NdotL * data.NdotV);
   }
 #endif

@@ -40,7 +40,7 @@
       voxelPosition = WorldSpaceToNormalizedVoxelSpace(worldPosition);
 
       perceptualRoughness = 1.0 - glossiness;
-      roughness = 1.0 - glossiness * glossiness;
+      roughness = 1.0 - glossiness;
       roughness *= roughness;
 
       vecR = reflect(-vecV, vecN);

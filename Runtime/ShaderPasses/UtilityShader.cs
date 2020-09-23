@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public static class UtilityShader {
   public enum Pass {
@@ -22,4 +23,17 @@ public static class UtilityShader {
   }
 
   static Material _material;
+
+  //Why isn't command.SetShaderKeyword a thing...
+  public static void SetKeyword(CommandBuffer command, string keyword, bool enable)
+  {
+    if (enable)
+    {
+      command.EnableShaderKeyword(keyword);
+    }
+    else
+    {
+      command.DisableShaderKeyword(keyword);
+    }
+  }
 }

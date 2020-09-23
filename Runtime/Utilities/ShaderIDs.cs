@@ -27,7 +27,8 @@ internal static class ShaderIDs {
   internal static readonly int Displacement = Shader.PropertyToID("Displacement");
   internal static readonly int Dummy = Shader.PropertyToID("Dummy");
   internal static readonly int FrameBuffer = Shader.PropertyToID("FrameBuffer");
-  internal static readonly int LightingBuffer = Shader.PropertyToID("LightingBuffer");
+  internal static readonly int DiffuseBuffer = Shader.PropertyToID("DiffuseBuffer");
+  internal static readonly int SpecularBuffer = Shader.PropertyToID("SpecularBuffer");
   internal static readonly int LightingBufferSwap = Shader.PropertyToID("LightingBufferSwap");
   internal static readonly int stepwidth = Shader.PropertyToID("stepwidth");
   internal static readonly int IndirectDiffuseModifier = Shader.PropertyToID("IndirectDiffuseModifier");
@@ -35,6 +36,8 @@ internal static class ShaderIDs {
   internal static readonly int LightCount = Shader.PropertyToID("LightCount");
   internal static readonly int LightSources = Shader.PropertyToID("LightSources");
   internal static readonly int LowResColor = Shader.PropertyToID("LowResColor");
+  internal static readonly int LowResDiffuse = Shader.PropertyToID("LowResDiffuse");
+  internal static readonly int LowResSpecular = Shader.PropertyToID("LowResSpecular");
   internal static readonly int LowResDepth = Shader.PropertyToID("LowResDepth");
   internal static readonly int MipmapLevel = Shader.PropertyToID("MipmapLevel");
   internal static readonly int NumThreads = Shader.PropertyToID("NumThreads");
@@ -74,4 +77,7 @@ internal static class ShaderIDs {
   internal static readonly int NoiseRGB16bit = Shader.PropertyToID("NoiseRGB16bit");
   internal static readonly int SkyProbe = Shader.PropertyToID("SkyProbe");
   internal static readonly int SkyProbeHDRInfo = Shader.PropertyToID("SkyProbeHDRInfo");
+  internal static readonly int _previousDiffuseLighting = Shader.PropertyToID("_previousDiffuseLighting");
+  internal static readonly int _previousSpecularLighting = Shader.PropertyToID("_previousSpecularLighting");
+  internal static readonly int bounceAttenuation = Shader.PropertyToID("bounceAttenuation");
 }

@@ -45,6 +45,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   public Mipmapper.Mode mipmapFilterMode = Mipmapper.Mode.Gaussian3x3x3;
   public float indirectDiffuseModifier = 1f;
   public float indirectSpecularModifier = 1f;
+  public float bounceAttenuation = 0.8f;
 
   public enum LightingMethod
   {
@@ -125,8 +126,10 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   };
   public RayCountSet PerPixelGIRays = new RayCountSet(36,16,4);
   public RayCountSet PerPixelShadowRays = new RayCountSet(5,2,2);
+  public bool SpecularTemporalCorrection = true;
 
-  public int PerPixelSpatialFilterPasses = 4;
+  public int PerPixelDiffuseSpatialFilterPasses = 0;
+  public int PerPixelSpecularSpatialFilterPasses = 0;
 
   public int PerVoxelGIRays = 1;
 
@@ -268,41 +271,14 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
   }
 
   void SetupShaderKeywords(ScriptableRenderContext renderContext) {
-    if (anisotropicVoxel) {
-      _command.EnableShaderKeyword("VXGI_ANISOTROPIC_VOXEL");
-    } else {
-      _command.DisableShaderKeyword("VXGI_ANISOTROPIC_VOXEL");
-    }
-
     _command.EnableShaderKeyword("VXGI_CASCADES");
 
-    if (RequiresColors) {
-      _command.EnableShaderKeyword("VXGI_COLOR");
-    } else {
-      _command.DisableShaderKeyword("VXGI_COLOR");
-    }
-
-    if (RequiresBinary) {
-      _command.EnableShaderKeyword("VXGI_BINARY");
-    } else {
-      _command.DisableShaderKeyword("VXGI_BINARY");
-    }
-    if (aproxTwoSidedVoxel)
-    {
-      _command.EnableShaderKeyword("VXGI_APPROXIMATETWOSIDES");
-    }
-    else
-    {
-      _command.DisableShaderKeyword("VXGI_APPROXIMATETWOSIDES");
-    }
-    if (AmbientType == AmbientTypes.Color)
-    {
-      _command.EnableShaderKeyword("VXGI_AMBIENTCOLOR");
-    }
-    else
-    {
-      _command.DisableShaderKeyword("VXGI_AMBIENTCOLOR");
-    }
+    UtilityShader.SetKeyword(_command, "VXGI_ANISOTROPIC_VOXEL", anisotropicVoxel);
+    UtilityShader.SetKeyword(_command, "VXGI_COLOR", RequiresColors);
+    UtilityShader.SetKeyword(_command, "VXGI_BINARY", RequiresBinary);
+    UtilityShader.SetKeyword(_command, "VXGI_APPROXIMATETWOSIDES", aproxTwoSidedVoxel);
+    UtilityShader.SetKeyword(_command, "VXGI_AMBIENTCOLOR", AmbientType == AmbientTypes.Color);
+    UtilityShader.SetKeyword(_command, "VXGI_TEMPORAL_EXPERIMENTALSPECULAR", SpecularTemporalCorrection);
 
     renderContext.ExecuteCommandBuffer(_command);
     _command.Clear();
@@ -329,6 +305,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     }
     _command.SetGlobalFloat(ShaderIDs.IndirectDiffuseModifier, indirectDiffuseModifier);
     _command.SetGlobalFloat(ShaderIDs.IndirectSpecularModifier, indirectSpecularModifier);
+    _command.SetGlobalFloat(ShaderIDs.bounceAttenuation, bounceAttenuation);
     _command.SetGlobalFloat(ShaderIDs.VXGI_VolumeExtent, .5f * bound);
     _command.SetGlobalFloat(ShaderIDs.VXGI_VolumeSize, bound);
     _command.SetGlobalFloat(ShaderIDs.NoiseNum, (float)NoiseNum);
@@ -340,7 +317,7 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
     _command.SetGlobalInt(ShaderIDs.Resolution, ColorVoxelizer.ColorStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.BinaryResolution, BinaryVoxelizer.BinaryStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.StepMapResolution, BinaryVoxelizer.StepMapper.StepMapStorageResolution.x);
-    _command.SetGlobalFloat(ShaderIDs.BinaryVoxelSize, bound*2.0f/(float)BinaryVoxelizer.BinaryStorageResolution.x);
+    _command.SetGlobalFloat(ShaderIDs.BinaryVoxelSize, bound/(float)BinaryVoxelizer.BinaryStorageResolution.x);
     _command.SetGlobalInt(ShaderIDs.VXGI_CascadesCount, cascadesCount);
     _command.SetGlobalMatrix(ShaderIDs.WorldToVoxel, BinaryVoxelizer.worldToVoxel);
     _command.SetGlobalVector(ShaderIDs.VXGI_VolumeCenter, BinaryVoxelizer.renderedVoxelSpaceCenter);
@@ -410,7 +387,6 @@ Gaussian 4x4x4: slow, 2^n voxel resolution."
         binaryVoxelizer.StepMapper = new StepMapper(binaryVoxelizer);
       }
     }
-
 
     if (colorVoxelizer!=null)
     {
@@ -484,6 +460,8 @@ public class VXGIEditor : Editor
       _vxgi.PerPixelGIRays.PotentialBudget = SafeIntSlider("GI Budget (Update)", (int)Math.Sqrt((double)_vxgi.PerPixelGIRays.PotentialBudget), 1, 10, _vxgi.AllowUnsafeValues);
       _vxgi.PerPixelGIRays.PotentialBudget *= _vxgi.PerPixelGIRays.Budget;
 
+      _vxgi.SpecularTemporalCorrection = EditorGUILayout.Toggle("Specular Reprojection", _vxgi.SpecularTemporalCorrection);
+
       if (_vxgi.PerPixelGIRays.Target == 0)
         EditorGUILayout.LabelField("Per Pixel: Disabled");
       else
@@ -499,7 +477,8 @@ public class VXGIEditor : Editor
       _vxgi.PerPixelShadowRays.PotentialBudget = SafeIntSlider("Shadow Budget (Update)", _vxgi.PerPixelShadowRays.PotentialBudget, 1, 10, _vxgi.AllowUnsafeValues);
 
       EditorGUILayout.LabelField("Lighting - Per Pixel (Global)", EditorStyles.boldLabel);
-      _vxgi.PerPixelSpatialFilterPasses = SafeIntSlider("Spatial Filter Passes", _vxgi.PerPixelSpatialFilterPasses, 0, 5, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelDiffuseSpatialFilterPasses = SafeIntSlider("Diffuse Spatial Filter Passes", _vxgi.PerPixelDiffuseSpatialFilterPasses, 0, 5, _vxgi.AllowUnsafeValues);
+      _vxgi.PerPixelSpecularSpatialFilterPasses = SafeIntSlider("Specular Spatial Filter Passes", _vxgi.PerPixelSpecularSpatialFilterPasses, 0, 5, _vxgi.AllowUnsafeValues);
 
       EditorGUILayout.LabelField("Lighting - Per Voxel", EditorStyles.boldLabel);
       _vxgi.PerVoxelGIRays = SafeIntSlider("GI Quality", (int)Math.Sqrt((double)_vxgi.PerVoxelGIRays), 0, 5, _vxgi.AllowUnsafeValues);
@@ -523,6 +502,7 @@ public class VXGIEditor : Editor
         EditorGUILayout.HelpBox("Per-pixel samples must change each frame (animated noise) for temporal super-sampling to work.", MessageType.Warning);
       }
       GUI.enabled = true;
+
       _vxgi.AmbientType = (VXGI.AmbientTypes)EditorGUILayout.EnumPopup("Ambient Type", _vxgi.AmbientType);
 
       if (_vxgi.AmbientType == VXGI.AmbientTypes.Probe)
@@ -535,9 +515,8 @@ public class VXGIEditor : Editor
         _vxgi.AmbientColor = EditorGUILayout.ColorField("Ambient Color", _vxgi.AmbientColor);
 
       _vxgi.indirectDiffuseModifier = EditorGUILayout.FloatField("Indirect Diffuse Modifier", _vxgi.indirectDiffuseModifier);
-      GUI.enabled = false;
-        _vxgi.indirectSpecularModifier = EditorGUILayout.FloatField("Indirect Specular Modifier", _vxgi.indirectSpecularModifier);
-      _vxgi.indirectSpecularModifier = 0.0f;
+      _vxgi.indirectSpecularModifier = EditorGUILayout.FloatField("Indirect Specular Modifier", _vxgi.indirectSpecularModifier);
+      _vxgi.bounceAttenuation = EditorGUILayout.Slider("Multi-Bounce Lighting Attenuation", _vxgi.bounceAttenuation,0f,1f);
       GUI.enabled = true;
     }
 

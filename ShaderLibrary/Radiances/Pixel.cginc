@@ -10,11 +10,12 @@
 #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/Radiances/Raytracing.cginc"
 #include "Packages/com.looooong.srp.vxgi/ShaderLibrary/Noise.cginc"
 
-float3 DirectPixelRadiance(LightingData data)
+void DirectPixelRadiance(LightingData data, out float3 diffuse, out float3 specular)
 {
   float level = MinSampleLevel(data.voxelPosition);
   float voxelSize = VoxelSize(level);
-  float3 radiance = 0.0;
+  diffuse = 0.0;
+  specular = 0.0;
 
   for (uint i = 0; i < LightCount; i++) {
     LightSource lightSource = LightSources[i];
@@ -39,8 +40,8 @@ float3 DirectPixelRadiance(LightingData data)
     if (notInRange || (spotFalloff <= 0.0) || (data.NdotL <= 0.0)) continue;
 
     float influence = //VoxelVisibility(mad(2.0 * voxelSize, data.vecN, data.voxelPosition), lightSource.voxelPosition) * 
-      GeneralBRDF(data)
-      * data.NdotL
+      /*GeneralBRDF(data)
+      **/ data.NdotL
       * spotFalloff
       * lightSource.Attenuation(localPosition);
     if (influence > 0)
@@ -63,26 +64,36 @@ float3 DirectPixelRadiance(LightingData data)
 
       influence *= 1.0 - shadow;
 
-      radiance += influence * lightSource.color;
+      diffuse += DiffuseBRDF(data) * influence * lightSource.color;
+      specular += SpecularBRDF(data) * influence * lightSource.color;
     }
   }
 
-  return radiance;
 }
 
 float3 IndirectSpecularPixelRadiance(LightingData data)
 {
   return 0.0;
 }
-float3 IndirectDiffusePixelRadiance(LightingData data, bool newArea, out float samplesOutput)
+inline half3 FresnelLerp(half3 F0, half3 F90, half cosA)
+{
+  half t = Pow5(1 - cosA);   // ala Schlick interpoliation
+  return lerp(F0, F90, t);
+}
+void IndirectPixelRadiance(LightingData data, bool newArea, out float samplesOutput, out float3 diffuse, out float3 specular, out float3 specularHitPosAvg)
 {
   float sampleCountSqrt = newArea ? PerPixelGIRayCountsSqrt.z : PerPixelGIRayCountsSqrt.y;
   samplesOutput = newArea ? PerPixelGIRayCounts.z : PerPixelGIRayCounts.y;
-  if (TextureSDF(data.voxelPosition) < 0.0) return 0.0;
+  if (TextureSDF(data.voxelPosition) < 0.0) { diffuse = 0; specular = 0; return; }
 
-  float3 radiance = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, (uint)sampleCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
+  half grazingTerm = saturate((1-data.roughness) + (data.specularColor.r));
+  float specularChance = FresnelLerp(data.specularColor, grazingTerm, data.NdotV);
 
+  /*diffuse = StratifiedHemisphereSample(data.worldPosition, normalize(data.vecN), 25, (uint)sampleCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
+  diffuse *= 1 - specularChance;
+  specular = StratifiedSpecularSample(data.roughness, normalize(data.vecR), data.worldPosition, normalize(data.vecN), 70, (uint)sampleCountSqrt, hash(float3(data.screenPosition, NoiseNum)));
+  specular *= specularChance;*/
 
-  return radiance;
+  StratifiedHemisphereSpecularSample(specularChance, data.roughness, normalize(data.vecR), data.worldPosition, normalize(data.vecN), 25, 70, (uint)sampleCountSqrt, hash(float3(data.screenPosition, NoiseNum)), diffuse, specular, specularHitPosAvg);
 }
 #endif // VXGI_SHADERLIBRARY_RADIANCES_PIXEL

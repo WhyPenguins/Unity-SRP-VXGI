@@ -181,8 +181,11 @@ public class Voxelizer : System.IDisposable {
 
       _command.name = $"VXGI.Voxelizer.{cascadeIndex}.{extent}";
       _command.BeginSample(_command.name);
-      _command.SetRenderTarget(binary, 0, CubemapFace.Unknown, -1);
-      _command.ClearRenderTarget(true, true, Color.clear);
+      if (VoxelizeBinary)
+      {
+        _command.SetRenderTarget(binary, 0, CubemapFace.Unknown, -1);
+        _command.ClearRenderTarget(true, true, Color.clear);
+      }
       _command.GetTemporaryRT(ShaderIDs.Dummy, _cameraDescriptor);
       _command.SetRenderTarget(ShaderIDs.Dummy, RenderBufferLoadAction.DontCare, RenderBufferStoreAction.DontCare);
       _command.SetGlobalInt(ShaderIDs.Resolution, Resolution);

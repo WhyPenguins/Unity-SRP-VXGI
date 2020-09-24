@@ -48,6 +48,7 @@ Shader "Hidden/VXGI/Voxelization"
       sampler2D _MainTex;
       sampler2D _MetallicGlossMap;
       sampler2D _EmissionMap;
+      float _Cutoff;
 
       uint VXGI_CascadeIndex;
       RWStructuredBuffer<VoxelData> VoxelBuffer;
@@ -235,14 +236,19 @@ Shader "Hidden/VXGI/Voxelization"
         //position = TransformCascadeToVoxelPosition(position, level);
 
         float4 finalColor = CalculateLitColor(WorldSpaceToNormalizedVoxelSpace(i.worldPos), i.worldPos, worldNor, color, emission);
+#if defined(_ALPHATEST_ON)
+        if (color.a < _Cutoff)
+        {
+          discard;
+          return 0;
+        }
+#endif
 #if defined(_ALPHABLEND_ON) || defined(_ALPHAPREMULTIPLY_ON)
         finalColor = Premul(finalColor);
 #else
         finalColor.a = 1;
 #endif
         d.SetColor(finalColor);
-
-
         //position = TransformVoxelToTexelPosition(position, level);
         position = min(VXGI_TexelResolution * position, VXGI_TexelResolutionMinus);
 #ifdef VXGI_COLOR
@@ -255,7 +261,8 @@ Shader "Hidden/VXGI/Voxelization"
         VoxelBuffer[counter] = d;
 #endif
 #ifdef VXGI_BINARY
-        VoxelBinaryBuffer[position] = 1;
+        if (finalColor.a > 0.8)
+          VoxelBinaryBuffer[position] = 1;
 #endif
 
         return 0.0;
